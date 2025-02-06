@@ -278,6 +278,11 @@ abstract class PdfDocument {
   /// It does not mean the document contents (or the document files) are identical.
   bool isIdenticalDocumentHandle(Object? other);
 
+  /// Extracts a destination from a click on a form field on the given page.
+  ///
+  /// Loads the page and sets up a temporary form fill environment to simulate a click
+  /// at [position]. If the field has a `/GoTo` action, its destination is captured and
+  /// returned as a [PdfDest].
   PdfDest? destFromClickOnFormField(PdfPage pdfPage, Offset position);
 }
 
