@@ -430,6 +430,68 @@ class PdfDocumentPdfium extends PdfDocument {
       other is PdfDocumentPdfium && document.address == other.document.address;
 
   @override
+  PdfDest? destFromClickOnFormField(PdfPage pdfPage, Offset position) {
+    PdfDest? dest;
+    final page = pdfium.FPDF_LoadPage(document, pdfPage.pageNumber - 1);
+    if (page == nullptr) {
+      throw PdfException('FPDF_LoadPage(${pdfPage.pageNumber}) failed.');
+    }
+    Pointer<pdfium_bindings.FPDF_FORMFILLINFO> formInfo = nullptr;
+    pdfium_bindings.FPDF_FORMHANDLE formHandle = nullptr;
+    try {
+      formInfo = calloc.allocate<pdfium_bindings.FPDF_FORMFILLINFO>(
+          sizeOf<pdfium_bindings.FPDF_FORMFILLINFO>());
+      formInfo.ref.version = 1;
+      formHandle = pdfium.FPDFDOC_InitFormFillEnvironment(
+        document,
+        formInfo,
+      );
+      void doGoToAction(Pointer<pdfium_bindings.FPDF_FORMFILLINFO> info,
+          int pageIndex,
+          int zoomMode,
+          Pointer<Float> fPosArray,
+          int sizeOfArray) {
+        dest = PdfDest(
+            pageIndex + 1,
+            PdfDestCommand.values[zoomMode],
+            List.generate(sizeOfArray, (i) => (fPosArray + i).value.toDouble()),
+        );
+      }
+      formInfo.ref.FFI_DoGoToAction = NativeCallable<Void Function(
+          Pointer<pdfium_bindings.FPDF_FORMFILLINFO>,
+          Int, // pageIndex
+          Int, // zoomMode
+          Pointer<Float>, // fPosArray
+          Int, // sizeOfArray
+          )>.isolateLocal(doGoToAction).nativeFunction;
+      pdfium.FORM_OnAfterLoadPage(page, formHandle);
+      final x = position.dx;
+      final y = position.dy;
+      final hasFormFieldAtPoint = pdfium.FPDFPage_HasFormFieldAtPoint(
+          formHandle,
+          page,
+          x,
+          y,
+      );
+      if (hasFormFieldAtPoint != -1) {
+        pdfium.FORM_OnMouseMove(formHandle, page, 0, x, y);
+        pdfium.FORM_OnLButtonDown(formHandle, page, 0, x, y);
+        pdfium.FORM_OnLButtonUp(formHandle, page, 0, x, y);
+      }
+      return dest;
+    } finally {
+      pdfium.FORM_OnBeforeClosePage(page, formHandle);
+      pdfium.FPDF_ClosePage(page);
+      if (formHandle != nullptr) {
+        pdfium.FPDFDOC_ExitFormFillEnvironment(formHandle);
+      }
+      if (formInfo != nullptr) {
+        calloc.free(formInfo);
+      }
+    }
+  }
+
+  @override
   Future<void> dispose() async {
     if (!isDisposed) {
       isDisposed = true;
@@ -757,6 +819,8 @@ class PdfPagePdfium extends PdfPage {
             (arena) {
               final document =
                   pdfium_bindings.FPDF_DOCUMENT.fromAddress(params.document);
+              final formHandle =
+              pdfium_bindings.FPDF_FORMHANDLE.fromAddress(params.formHandle);
               final page =
                   pdfium.FPDF_LoadPage(document, params.pageNumber - 1);
               try {
@@ -774,19 +838,15 @@ class PdfPagePdfium extends PdfPage {
                     r.right,
                     r.top > r.bottom ? r.bottom : r.top,
                   );
-                  final dest = _processAnnotDest(annot, document, arena);
-                  if (dest != nullptr) {
-                    links.add(
-                      PdfLink(
-                        [rect],
-                        dest: _pdfDestFromDest(dest, document, arena),
-                      ),
-                    );
-                  } else {
-                    final uri = _processAnnotLink(annot, document, arena);
-                    if (uri != null) {
-                      links.add(PdfLink([rect], url: uri));
-                    }
+                  final link = _createLinkForAnnot(
+                      annot,
+                      document,
+                      formHandle,
+                      arena,
+                      rect
+                  );
+                  if (link != null) {
+                    links.add(link);
                   }
                   pdfium.FPDFPage_CloseAnnot(annot);
                 }
@@ -796,8 +856,33 @@ class PdfPagePdfium extends PdfPage {
               }
             },
           ),
-          (document: document.document.address, pageNumber: pageNumber),
+          (document: document.document.address,
+          formHandle: document.formHandle.address,
+          pageNumber: pageNumber),
         );
+
+  static PdfLink? _createLinkForAnnot(
+      pdfium_bindings.FPDF_ANNOTATION annot,
+      pdfium_bindings.FPDF_DOCUMENT document,
+      pdfium_bindings.FPDF_FORMHANDLE formHandle,
+      Arena arena,
+      PdfRect rect) {
+    final dest = _processAnnotDest(annot, document, arena);
+    if (dest != nullptr) {
+      return PdfLink([rect], dest: _pdfDestFromDest(dest, document, arena));
+    }
+
+    final uri = _processAnnotLink(annot, document, arena);
+    if (uri != null) {
+      return PdfLink([rect], url: uri);
+    }
+
+    if (_isAnnotPushButton(annot, formHandle)) {
+      return PdfLink([rect]);
+    }
+
+    return null;
+  }
 
   static pdfium_bindings.FPDF_DEST _processAnnotDest(
       pdfium_bindings.FPDF_ANNOTATION annot,
@@ -839,6 +924,13 @@ class PdfPagePdfium extends PdfPage {
       default:
         return null;
     }
+  }
+
+  static bool _isAnnotPushButton(
+      pdfium_bindings.FPDF_ANNOTATION annot,
+      pdfium_bindings.FPDF_FORMHANDLE formHandle) {
+    final fieldType = pdfium.FPDFAnnot_GetFormFieldType(formHandle, annot);
+    return fieldType == pdfium_bindings.FPDF_FORMFIELD_PUSHBUTTON;
   }
 }
 

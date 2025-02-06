@@ -313,6 +313,9 @@ class PdfDocumentWeb extends PdfDocument {
       return obj.toString();
     }
   }
+
+  @override
+  PdfDest? destFromClickOnFormField(PdfPage pdfPage, Offset position) => null;
 }
 
 class PdfPageWeb extends PdfPage {

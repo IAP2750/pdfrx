@@ -2350,7 +2350,7 @@ class _CanvasLinkPainter {
 
   bool _handleLinkTap(Offset tapPosition) {
     _cursor = MouseCursor.defer;
-    final link = _findLinkAtPosition(tapPosition);
+    final link = _findLinkAtPositionOnTap(tapPosition);
     if (link != null) {
       final onLinkTap = _state.widget.params.linkHandlerParams?.onLinkTap;
       if (onLinkTap != null) {
@@ -2360,6 +2360,28 @@ class _CanvasLinkPainter {
     }
     _state._clearAllTextSelections();
     return false;
+  }
+
+  PdfLink? _findLinkAtPositionOnTap(Offset position) {
+    final link = _findLinkAtPosition(position);
+    if (link != null) {
+      if (link.dest == null && link.url == null) {
+        final document = _state._document;
+        final hitResult = _state._getPdfPageHitTestResult(
+          position,
+          useDocumentLayoutCoordinates: false,
+        );
+        if (hitResult != null) {
+          final dest = document?.destFromClickOnFormField(
+              hitResult.page,
+              hitResult.offset
+          );
+          return PdfLink(link.rects, dest: dest);
+        }
+      }
+      return link;
+    }
+    return null;
   }
 
   void _handleLinkMouseCursor(
