@@ -2075,7 +2075,7 @@ class _CanvasLinkPainter {
   PdfLink? _findLinkAtPositionOnTap(Offset position) {
     final link = _findLinkAtPosition(position);
     if (link != null) {
-      if (link.dest == null && link.url == null) {
+      if (link.isPushButton) {
         final document = _state._document;
         final hitResult = _state._getPdfPageHitTestResult(
           position,
@@ -2086,7 +2086,7 @@ class _CanvasLinkPainter {
               hitResult.page,
               hitResult.offset
           );
-          return PdfLink(link.rects, dest: dest);
+          return PdfLink(link.rects, dest: dest, isPushButton: true);
         }
       }
       return link;

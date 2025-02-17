@@ -782,7 +782,7 @@ class PdfPagePdfium extends PdfPage {
     }
 
     if (_isAnnotPushButton(annot, formHandle)) {
-      return PdfLink([rect]);
+      return PdfLink([rect], isPushButton: true);
     }
 
     return null;

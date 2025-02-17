@@ -892,7 +892,7 @@ enum PdfDestCommand { unknown, xyz, fit, fitH, fitV, fitR, fitB, fitBH, fitBV }
 /// See [PdfPage.loadLinks].
 @immutable
 class PdfLink {
-  const PdfLink(this.rects, {this.url, this.dest});
+  const PdfLink(this.rects, {this.url, this.dest, this.isPushButton = false});
 
   /// Link URL.
   final Uri? url;
@@ -901,6 +901,15 @@ class PdfLink {
   ///
   /// Link destination (link to page).
   final PdfDest? dest;
+
+  /// Whether this link is implemented as a push button.
+  ///
+  /// If `true`, the link behaves like a push button that triggers a navigation event when tapped.
+  /// In this case, the target ([url] or [dest]) might not be fully determined during parsing
+  /// and should be resolved later. For example, at runtime when the user interacts with the button
+  ///
+  /// See also: [PdfDocument.destFromClickOnFormField]
+  final bool isPushButton;
 
   /// Link location.
   final List<PdfRect> rects;
@@ -911,7 +920,12 @@ class PdfLink {
   /// [rects] is typically growable and also modifiable. The method ensures that [rects] is unmodifiable.
   /// [dest] is also compacted by calling [PdfDest.compact].
   PdfLink compact() {
-    return PdfLink(List.unmodifiable(rects), url: url, dest: dest?.compact());
+    return PdfLink(
+      List.unmodifiable(rects),
+      url: url,
+      dest: dest?.compact(),
+      isPushButton: isPushButton,
+    );
   }
 }
 
