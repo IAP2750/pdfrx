@@ -1,21 +1,12 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <!--
-    If you are serving your web app in a path other than the root, change the
-    href value below to reflect the base path you are serving from.
-
-    The path provided below has to start and end with a slash "/" in order for
-    it to work correctly.
-
-    Fore more details:
-    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
-  -->
-  <base href="/">
+  <base href="/pdfrx/">
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="description" content="pdfrx demo page">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
@@ -26,8 +17,15 @@
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>example</title>
+  <title>pdfrx demo page</title>
   <link rel="manifest" href="manifest.json">
+
+  <!-- Workaround for GitHub Pages CORS policy
+       https://github.com/gzuidhof/coi-serviceworker -->
+  <script>
+    window.coi = {coepCredentialless: () => true,}
+  </script>
+  <script src="coi-serviceworker.min.js"></script>
 </head>
 <body>
   <script src="flutter_bootstrap.js" async></script>
