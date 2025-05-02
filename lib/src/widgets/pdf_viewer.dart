@@ -2091,9 +2091,11 @@ class _CanvasLinkPainter {
           useDocumentLayoutCoordinates: false,
         );
         if (hitResult != null) {
+          final page = hitResult.page;
+          final offset = hitResult.offset;
           final dest = document?.destFromClickOnFormField(
-              hitResult.page,
-              hitResult.offset
+              page,
+              Offset(offset.x, offset.y)
           );
           return PdfLink(link.rects, dest: dest, isPushButton: true);
         }

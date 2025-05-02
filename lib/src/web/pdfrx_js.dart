@@ -256,6 +256,9 @@ class PdfDocumentJs extends PdfDocument {
     }
     return nameValue;
   }
+
+  @override
+  PdfDest? destFromClickOnFormField(PdfPage pdfPage, Offset position) => null;
 }
 
 class PdfPageJs extends PdfPage {

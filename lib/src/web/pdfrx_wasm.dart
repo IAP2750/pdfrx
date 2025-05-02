@@ -267,6 +267,9 @@ class PdfDocumentWasm extends PdfDocument {
         )
         .toList();
   }
+
+  @override
+  PdfDest? destFromClickOnFormField(PdfPage pdfPage, ui.Offset position) => null;
 }
 
 class PdfPageRenderCancellationTokenWasm extends PdfPageRenderCancellationToken {

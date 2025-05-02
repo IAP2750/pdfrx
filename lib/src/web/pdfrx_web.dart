@@ -32,9 +32,6 @@ PdfDocumentFactory getDocumentFactory() {
   } else {
     return getPdfjsDocumentFactory();
   }
-
-  @override
-  PdfDest? destFromClickOnFormField(PdfPage pdfPage, Offset position) => null;
 }
 
 bool _initialized = false;
