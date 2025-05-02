@@ -14,7 +14,9 @@ import 'web/pdfrx_web.dart' if (dart.library.io) 'pdfium/pdfrx_pdfium.dart';
 
 /// Class to provide Pdfrx's configuration.
 /// The parameters should be set before calling any Pdfrx's functions.
-abstract class Pdfrx {
+class Pdfrx {
+  Pdfrx._();
+
   /// Explicitly specify pdfium module path for special purpose.
   ///
   /// It is not supported on Flutter Web.
@@ -29,6 +31,28 @@ abstract class Pdfrx {
   ///
   /// It is not supported on Flutter Web.
   static http.Client Function()? createHttpClient;
+
+  /// Select the Web runtime type.
+  ///
+  /// To use PDFium (WASM) runtime, set this value to [PdfrxWebRuntimeType.pdfiumWasm] and you must add
+  /// [pdfrx_wasm](https://pub.dartlang.org/packages/pdfrx_wasm) to your `pubspec.yaml`'s `dependencies`.
+  ///
+  /// It is used only when on Flutter Web.
+  static PdfrxWebRuntimeType webRuntimeType = PdfrxWebRuntimeType.pdfjs;
+
+  /// To override the default pdfium WASM modules directory URL. It must be terminated by '/'.
+  ///
+  /// It is used only when on Flutter Web with [Pdfrx.webRuntimeType] is [PdfrxWebRuntimeType.pdfiumWasm].
+  static String? pdfiumWasmModulesUrl;
+}
+
+/// Web runtime type.
+enum PdfrxWebRuntimeType {
+  /// Use PDF.js.
+  pdfjs,
+
+  /// Use PDFium (WASM).
+  pdfiumWasm,
 }
 
 /// For platform abstraction purpose; use [PdfDocument] instead.
@@ -46,6 +70,7 @@ abstract class PdfDocumentFactory {
     PdfPasswordProvider? passwordProvider,
     bool firstAttemptByEmptyPassword = true,
     String? sourceName,
+    bool allowDataOwnershipTransfer = false,
     void Function()? onDispose,
   });
 
@@ -83,7 +108,17 @@ abstract class PdfDocumentFactory {
   ///
   /// It is used to switch PDFium/web implementation based on the running platform and of course, you can
   /// override it to use your own implementation.
-  static PdfDocumentFactory instance = PdfDocumentFactoryImpl();
+  static PdfDocumentFactory instance = getDocumentFactory();
+
+  /// Get [PdfDocumentFactory] that uses PDFium implementation.
+  ///
+  /// For Flutter Web, it uses PDFium (WASM) implementation.
+  static PdfDocumentFactory get pdfium => getPdfiumDocumentFactory();
+
+  /// Get [PdfDocumentFactory] that uses PDF.js implementation.
+  ///
+  /// It is only supported on Flutter Web.
+  static PdfDocumentFactory get pdfjs => getPdfjsDocumentFactory();
 }
 
 /// Callback function to notify download progress.
@@ -122,6 +157,7 @@ PdfPasswordProvider createSimplePasswordProvider(String? password) {
 
 /// Handles PDF document loaded on memory.
 abstract class PdfDocument {
+  /// Constructor to force initialization of sourceName.
   PdfDocument({required this.sourceName});
 
   /// File path, `asset:[ASSET_PATH]` or `memory:` depending on the content opened.
@@ -133,14 +169,15 @@ abstract class PdfDocument {
   /// Determine whether the PDF file is encrypted or not.
   bool get isEncrypted;
 
+  /// PdfDocument must have [dispose] function.
   Future<void> dispose();
 
   /// Opening the specified file.
   /// For Web, [filePath] can be relative path from `index.html` or any arbitrary URL but it may be restricted by CORS.
   ///
   /// [passwordProvider] is used to provide password for encrypted PDF. See [PdfPasswordProvider] for more info.
-  /// [firstAttemptByEmptyPassword] is used to determine whether the first attempt to open the PDF is by empty password
-  /// or not. For more info, see [PdfPasswordProvider].
+  /// [firstAttemptByEmptyPassword] is used to determine whether the first attempt to open the PDF is by empty
+  /// password or not. For more info, see [PdfPasswordProvider].
   static Future<PdfDocument> openFile(
     String filePath, {
     PdfPasswordProvider? passwordProvider,
@@ -154,8 +191,8 @@ abstract class PdfDocument {
   /// Opening the specified asset.
   ///
   /// [passwordProvider] is used to provide password for encrypted PDF. See [PdfPasswordProvider] for more info.
-  /// [firstAttemptByEmptyPassword] is used to determine whether the first attempt to open the PDF is by empty password
-  /// or not. For more info, see [PdfPasswordProvider].
+  /// [firstAttemptByEmptyPassword] is used to determine whether the first attempt to open the PDF is by empty
+  /// password or not. For more info, see [PdfPasswordProvider].
   static Future<PdfDocument> openAsset(
     String name, {
     PdfPasswordProvider? passwordProvider,
@@ -174,17 +211,22 @@ abstract class PdfDocument {
   ///
   /// [sourceName] must be some ID, e.g., file name or URL, to identify the source of the PDF. If [sourceName] is not
   /// unique for each source, the viewer may not work correctly.
+  ///
+  /// Web only: [allowDataOwnershipTransfer] is used to determine if the data buffer can be transferred to
+  /// the worker thread.
   static Future<PdfDocument> openData(
     Uint8List data, {
     PdfPasswordProvider? passwordProvider,
     bool firstAttemptByEmptyPassword = true,
     String? sourceName,
+    bool allowDataOwnershipTransfer = false,
     void Function()? onDispose,
   }) => PdfDocumentFactory.instance.openData(
     data,
     passwordProvider: passwordProvider,
     firstAttemptByEmptyPassword: firstAttemptByEmptyPassword,
     sourceName: sourceName,
+    allowDataOwnershipTransfer: allowDataOwnershipTransfer,
     onDispose: onDispose,
   );
 
@@ -195,8 +237,8 @@ abstract class PdfDocument {
   /// The default size is 1MB.
   ///
   /// [passwordProvider] is used to provide password for encrypted PDF. See [PdfPasswordProvider] for more info.
-  /// [firstAttemptByEmptyPassword] is used to determine whether the first attempt to open the PDF is by empty password
-  /// or not. For more info, see [PdfPasswordProvider].
+  /// [firstAttemptByEmptyPassword] is used to determine whether the first attempt to open the PDF is by empty
+  /// password or not. For more info, see [PdfPasswordProvider].
   ///
   /// [sourceName] must be some ID, e.g., file name or URL, to identify the source of the PDF. If [sourceName] is not
   /// unique for each source, the viewer may not work correctly.
@@ -225,8 +267,8 @@ abstract class PdfDocument {
   /// For other platforms, it uses [pdfDocumentFromUri] that uses HTTP's range request to download the file.
   ///
   /// [passwordProvider] is used to provide password for encrypted PDF. See [PdfPasswordProvider] for more info.
-  /// [firstAttemptByEmptyPassword] is used to determine whether the first attempt to open the PDF is by empty password
-  /// or not. For more info, see [PdfPasswordProvider].
+  /// [firstAttemptByEmptyPassword] is used to determine whether the first attempt to open the PDF is by empty
+  /// password or not. For more info, see [PdfPasswordProvider].
   ///
   /// [progressCallback] is called when the download progress is updated (Not supported on Web).
   /// [reportCallback] is called when the download is completed (Not supported on Web).
@@ -757,10 +799,11 @@ class PdfRect {
   }
 
   /// Determine whether the rectangle contains the specified point (in the PDF page coordinates).
-  bool contains(double x, double y) => x >= left && x <= right && y >= bottom && y <= top;
+  bool containsXy(double x, double y, {double margin = 0}) =>
+      x >= left - margin && x <= right + margin && y >= bottom - margin && y <= top + margin;
 
   /// Determine whether the rectangle contains the specified point (in the PDF page coordinates).
-  bool containsOffset(Offset offset) => contains(offset.dx, offset.dy);
+  bool containsPoint(PdfPoint offset, {double margin = 0}) => containsXy(offset.x, offset.y, margin: margin);
 
   /// Empty rectangle.
   static const empty = PdfRect(0, 0, 0, 0);
@@ -784,6 +827,7 @@ class PdfRect {
   Rect toRectInPageRect({required PdfPage page, required Rect pageRect}) =>
       toRect(page: page, scaledPageSize: pageRect.size).translate(pageRect.left, pageRect.top);
 
+  /// Rotate the rectangle.
   PdfRect rotate(int rotation, PdfPage page) {
     final swap = (page.rotation.index & 1) == 1;
     final width = swap ? page.height : page.width;
@@ -797,6 +841,25 @@ class PdfRect {
         return PdfRect(width - right, height - bottom, width - left, height - top);
       case 3:
         return PdfRect(height - top, right, height - bottom, left);
+      default:
+        throw ArgumentError.value(rotate, 'rotate');
+    }
+  }
+
+  /// Rotate the rectangle in reverse direction.
+  PdfRect rotateReverse(int rotation, PdfPage page) {
+    final swap = (page.rotation.index & 1) == 1;
+    final width = swap ? page.height : page.width;
+    final height = swap ? page.width : page.height;
+    switch (rotation & 3) {
+      case 0:
+        return this;
+      case 1:
+        return PdfRect(width - top, right, width - bottom, left);
+      case 2:
+        return PdfRect(width - right, height - bottom, width - left, height - top);
+      case 3:
+        return PdfRect(bottom, height - left, top, height - right);
       default:
         throw ArgumentError.value(rotate, 'rotate');
     }
@@ -817,6 +880,19 @@ class PdfRect {
   @override
   String toString() {
     return 'PdfRect(left: $left, top: $top, right: $right, bottom: $bottom)';
+  }
+}
+
+extension RectPdfRectExt on Rect {
+  /// Convert to [PdfRect] in PDF page coordinates.
+  PdfRect toPdfRect({required PdfPage page, Size? scaledPageSize, int? rotation}) {
+    final scale = scaledPageSize == null ? 1.0 : scaledPageSize.height / page.height;
+    return PdfRect(
+      left / scale,
+      page.height - top / scale,
+      right / scale,
+      page.height - bottom / scale,
+    ).rotateReverse(rotation ?? page.rotation.index, page);
   }
 }
 
@@ -877,7 +953,28 @@ class PdfDest {
 }
 
 /// [PDF 32000-1:2008, 12.3.2.2 Explicit Destinations, Table 151](https://opensource.adobe.com/dc-acrobat-sdk-docs/pdfstandards/PDF32000_2008.pdf#page=374)
-enum PdfDestCommand { unknown, xyz, fit, fitH, fitV, fitR, fitB, fitBH, fitBV }
+enum PdfDestCommand {
+  unknown('unknown'),
+  xyz('xyz'),
+  fit('fit'),
+  fitH('fith'),
+  fitV('fitv'),
+  fitR('fitr'),
+  fitB('fitb'),
+  fitBH('fitbh'),
+  fitBV('fitbv');
+
+  const PdfDestCommand(this.name);
+
+  /// Command name.
+  final String name;
+
+  /// Parse the command name to [PdfDestCommand].
+  factory PdfDestCommand.parse(String name) {
+    final nameLow = name.toLowerCase();
+    return PdfDestCommand.values.firstWhere((e) => e.name == nameLow, orElse: () => PdfDestCommand.unknown);
+  }
+}
 
 /// Link in PDF page.
 ///
@@ -905,6 +1002,11 @@ class PdfLink {
   /// [dest] is also compacted by calling [PdfDest.compact].
   PdfLink compact() {
     return PdfLink(List.unmodifiable(rects), url: url, dest: dest?.compact());
+  }
+
+  @override
+  String toString() {
+    return 'PdfLink{${url?.toString() ?? dest?.toString()}, rects: $rects}';
   }
 }
 
@@ -934,4 +1036,89 @@ class PdfException implements Exception {
 
 class PdfPasswordException extends PdfException {
   const PdfPasswordException(super.message);
+}
+
+/// PDF page coordinates point.
+///
+/// In Pdf page coordinates, the origin is at the bottom-left corner and Y-axis is pointing upward.
+/// The unit is normally in points (1/72 inch).
+class PdfPoint {
+  const PdfPoint(this.x, this.y);
+
+  /// X coordinate.
+  final double x;
+
+  /// Y coordinate.
+  final double y;
+
+  @override
+  String toString() => 'PdfOffset($x, $y)';
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+
+    return other is PdfPoint && other.x == x && other.y == y;
+  }
+
+  @override
+  int get hashCode => x.hashCode ^ y.hashCode;
+
+  /// Convert to [Offset] in Flutter coordinate.
+  /// [page] is the page to convert the rectangle.
+  /// [scaledPageSize] is the scaled page size to scale the rectangle. If not specified, [PdfPage.size] is used.
+  /// [rotation] is the rotation of the page. If not specified, [PdfPage.rotation] is used.
+  Offset toOffset({required PdfPage page, Size? scaledPageSize, int? rotation}) {
+    final rotated = rotate(rotation ?? page.rotation.index, page);
+    final orig = rotated.rotateReverse(rotation ?? page.rotation.index, page);
+    print('this=$this, rotated=$rotated, orig=$orig');
+    final scale = scaledPageSize == null ? 1.0 : scaledPageSize.height / page.height;
+    return Offset(rotated.x * scale, (page.height - rotated.y) * scale);
+  }
+
+  /// Rotate the point.
+  PdfPoint rotate(int rotation, PdfPage page) {
+    final swap = (page.rotation.index & 1) == 1;
+    final width = swap ? page.height : page.width;
+    final height = swap ? page.width : page.height;
+    switch (rotation & 3) {
+      case 0:
+        return this;
+      case 1:
+        return PdfPoint(y, width - x);
+      case 2:
+        return PdfPoint(width - x, height - y);
+      case 3:
+        return PdfPoint(height - y, x);
+      default:
+        throw ArgumentError.value(rotate, 'rotate');
+    }
+  }
+
+  /// Rotate the point in reverse direction.
+  PdfPoint rotateReverse(int rotation, PdfPage page) {
+    final swap = (page.rotation.index & 1) == 1;
+    final width = swap ? page.height : page.width;
+    final height = swap ? page.width : page.height;
+    switch (rotation & 3) {
+      case 0:
+        return this;
+      case 1:
+        return PdfPoint(width - y, x);
+      case 2:
+        return PdfPoint(width - x, height - y);
+      case 3:
+        return PdfPoint(y, height - x);
+      default:
+        throw ArgumentError.value(rotate, 'rotate');
+    }
+  }
+}
+
+extension OffsetPdfPointExt on Offset {
+  /// Convert to [PdfPoint] in PDF page coordinates.
+  PdfPoint toPdfPoint({required PdfPage page, Size? scaledPageSize, int? rotation}) {
+    final scale = scaledPageSize == null ? 1.0 : page.height / scaledPageSize.height;
+    return PdfPoint(dx * scale, page.height - dy * scale).rotateReverse(rotation ?? page.rotation.index, page);
+  }
 }

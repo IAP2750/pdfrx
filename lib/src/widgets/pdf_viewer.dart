@@ -1,7 +1,6 @@
 // ignore_for_file: public_member_api_docs
 import 'dart:async';
 import 'dart:collection';
-import 'dart:io';
 import 'dart:math';
 import 'dart:ui' as ui;
 
@@ -15,6 +14,7 @@ import 'package:synchronized/extension.dart';
 import 'package:vector_math/vector_math_64.dart' as vec;
 
 import '../../pdfrx.dart';
+import '../utils/platform.dart';
 import 'interactive_viewer.dart' as iv;
 import 'pdf_error_widget.dart';
 import 'pdf_page_links_overlay.dart';
@@ -253,11 +253,6 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
         if (widget.params.annotationRenderingMode != oldWidget?.params.annotationRenderingMode) {
           _releaseAllImages();
         }
-        _relayoutPages();
-
-        if (mounted) {
-          setState(() {});
-        }
       }
       return;
     } else {
@@ -290,14 +285,6 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
     _pageImagesPartial.clear();
   }
 
-  void _relayout() {
-    _relayoutPages();
-    _releaseAllImages();
-    if (mounted) {
-      setState(() {});
-    }
-  }
-
   void _onDocumentChanged() async {
     _layout = null;
 
@@ -321,8 +308,6 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
     }
 
     _document = document;
-
-    _relayoutPages();
 
     _controller ??= widget.controller ?? PdfViewerController();
     _controller!._attach(this);
@@ -380,92 +365,106 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
         child: widget.params.loadingBannerBuilder?.call(context, listenable.bytesDownloaded, listenable.totalBytes),
       );
     }
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        if (_updateViewSizeAndCoverScale(Size(constraints.maxWidth, constraints.maxHeight))) {
-          if (_initialized) {
-            Future.microtask(() {
-              if (_initialized && mounted) {
-                _goTo(_makeMatrixInSafeRange(_txController.value));
-              }
-            });
-          }
-        }
+    Widget selectableRegionInjector(Widget child) =>
+        widget.params.selectableRegionInjector?.call(context, child) ??
+        (widget.params.enableTextSelection ? SelectionArea(child: child) : child);
 
-        if (!_initialized && _layout != null) {
-          _initialized = true;
-          Future.microtask(() async {
-            if (mounted) {
-              final initialPageNumber =
-                  widget.params.calculateInitialPageNumber?.call(_document!, _controller!) ?? widget.initialPageNumber;
-              await _goToPage(pageNumber: initialPageNumber, duration: Duration.zero);
-
-              if (mounted && _document != null && _controller != null) {
-                widget.params.onViewerReady?.call(_document!, _controller!);
-              }
-            }
-          });
-        }
-
-        Widget selectableRegionInjector(Widget child) =>
-            widget.params.selectableRegionInjector?.call(context, child) ??
-            (widget.params.enableTextSelection ? SelectionArea(child: child) : child);
-
-        return Container(
-          color: widget.params.backgroundColor,
-          child: Focus(
-            onKeyEvent: _onKeyEvent,
-            child: StreamBuilder(
-              stream: _updateStream,
-              builder: (context, snapshot) {
-                _relayoutPages();
-                _determineCurrentPage();
-                _calcAlternativeFitScale();
-                _calcZoomStopTable();
-                return selectableRegionInjector(
-                  Builder(
-                    builder: (context) {
-                      return Stack(
-                        children: [
-                          iv.InteractiveViewer(
-                            transformationController: _txController,
-                            constrained: false,
-                            boundaryMargin: widget.params.boundaryMargin ?? const EdgeInsets.all(double.infinity),
-                            maxScale: widget.params.maxScale,
-                            minScale: _alternativeFitScale != null ? _alternativeFitScale! / 2 : minScale,
-                            panAxis: widget.params.panAxis,
-                            panEnabled: widget.params.panEnabled,
-                            scaleEnabled: widget.params.scaleEnabled,
-                            onInteractionEnd: _onInteractionEnd,
-                            onInteractionStart: _onInteractionStart,
-                            onInteractionUpdate: widget.params.onInteractionUpdate,
-                            interactionEndFrictionCoefficient: widget.params.interactionEndFrictionCoefficient,
-                            onWheelDelta: widget.params.scrollByMouseWheel != null ? _onWheelDelta : null,
-                            // PDF pages
-                            child: CustomPaint(
-                              foregroundPainter: _CustomPainter.fromFunctions(_customPaint),
-                              size: _layout!.documentSize,
-                            ),
-                          ),
-                          ..._buildPageOverlayWidgets(context),
-                          if (_canvasLinkPainter.isEnabled)
-                            SelectionContainer.disabled(child: _canvasLinkPainter.linkHandlingOverlay(_viewSize!)),
-                          if (widget.params.viewerOverlayBuilder != null)
-                            ...widget
-                                .params
-                                .viewerOverlayBuilder!(context, _viewSize!, _canvasLinkPainter._handleLinkTap)
-                                .map((e) => SelectionContainer.disabled(child: e)),
-                        ],
-                      );
-                    },
-                  ),
-                );
-              },
-            ),
-          ),
-        );
-      },
+    return Container(
+      color: widget.params.backgroundColor,
+      child: _PdfViewerKeyHandler(
+        onKeyRepeat: _onKey,
+        params: widget.params.keyHandlerParams,
+        child: StreamBuilder(
+          stream: _updateStream,
+          builder: (context, snapshot) {
+            return selectableRegionInjector(
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  _updateLayout(Size(constraints.maxWidth, constraints.maxHeight));
+                  return Stack(
+                    children: [
+                      iv.InteractiveViewer(
+                        transformationController: _txController,
+                        constrained: false,
+                        boundaryMargin: widget.params.boundaryMargin ?? const EdgeInsets.all(double.infinity),
+                        maxScale: widget.params.maxScale,
+                        minScale: _alternativeFitScale != null ? _alternativeFitScale! / 2 : minScale,
+                        panAxis: widget.params.panAxis,
+                        panEnabled: widget.params.panEnabled,
+                        scaleEnabled: widget.params.scaleEnabled,
+                        onInteractionEnd: _onInteractionEnd,
+                        onInteractionStart: _onInteractionStart,
+                        onInteractionUpdate: widget.params.onInteractionUpdate,
+                        interactionEndFrictionCoefficient: widget.params.interactionEndFrictionCoefficient,
+                        onWheelDelta: widget.params.scrollByMouseWheel != null ? _onWheelDelta : null,
+                        // PDF pages
+                        child: CustomPaint(
+                          foregroundPainter: _CustomPainter.fromFunctions(_customPaint),
+                          size: _layout!.documentSize,
+                        ),
+                      ),
+                      ..._buildPageOverlayWidgets(context),
+                      if (_canvasLinkPainter.isEnabled)
+                        SelectionContainer.disabled(child: _canvasLinkPainter.linkHandlingOverlay(_viewSize!)),
+                      if (widget.params.viewerOverlayBuilder != null)
+                        ...widget.params.viewerOverlayBuilder!(context, _viewSize!, _canvasLinkPainter._handleLinkTap)
+                            .map((e) => SelectionContainer.disabled(child: e)),
+                    ],
+                  );
+                },
+              ),
+            );
+          },
+        ),
+      ),
     );
+  }
+
+  void _updateLayout(Size viewSize) {
+    final currentPageNumber = _guessCurrentPageNumber();
+    final oldSize = _viewSize;
+    final isViewSizeChanged = oldSize != viewSize;
+    _viewSize = viewSize;
+    final isLayoutChanged = _relayoutPages();
+
+    _calcCoverFitScale();
+    _calcZoomStopTable();
+
+    void callOnViewerSizeChanged() {
+      if (isViewSizeChanged) {
+        if (_controller != null && widget.params.onViewSizeChanged != null) {
+          widget.params.onViewSizeChanged!(viewSize, oldSize, _controller!);
+        }
+      }
+    }
+
+    if (!_initialized && _layout != null) {
+      _initialized = true;
+      Future.microtask(() async {
+        if (mounted) {
+          await _goToPage(pageNumber: _calcInitialPageNumber(), duration: Duration.zero);
+
+          if (mounted && _document != null && _controller != null) {
+            widget.params.onViewerReady?.call(_document!, _controller!);
+          }
+
+          callOnViewerSizeChanged();
+        }
+      });
+    } else if (isLayoutChanged || isViewSizeChanged) {
+      Future.microtask(() async {
+        if (mounted) {
+          await _goToPage(pageNumber: currentPageNumber ?? _calcInitialPageNumber(), duration: Duration.zero);
+          callOnViewerSizeChanged();
+        }
+      });
+    } else if (currentPageNumber != null && _pageNumber != currentPageNumber) {
+      _setCurrentPageNumber(currentPageNumber);
+    }
+  }
+
+  int _calcInitialPageNumber() {
+    return widget.params.calculateInitialPageNumber?.call(_document!, _controller!) ?? widget.initialPageNumber;
   }
 
   void _startInteraction() {
@@ -496,88 +495,56 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
   /// Last page number that is explicitly requested to go to.
   int? _gotoTargetPageNumber;
 
-  /// Key pressing state of ⌘ or Control depending on the platform.
-  static bool get _isCommandKeyPressed =>
-      Platform.isMacOS || Platform.isIOS
-          ? HardwareKeyboard.instance.isMetaPressed
-          : HardwareKeyboard.instance.isControlPressed;
-
-  KeyEventResult _onKeyEvent(FocusNode node, KeyEvent event) {
-    final isDown = event is KeyDownEvent;
-    switch (event.logicalKey) {
-      case LogicalKeyboardKey.pageUp:
-        if (isDown) {
-          _goToPage(pageNumber: (_gotoTargetPageNumber ?? _pageNumber!) - 1);
-        }
-        return KeyEventResult.handled;
-      case LogicalKeyboardKey.pageDown:
-        if (isDown) {
-          _goToPage(pageNumber: (_gotoTargetPageNumber ?? _pageNumber!) + 1);
-        }
-        return KeyEventResult.handled;
-      case LogicalKeyboardKey.home:
-        if (isDown) {
-          _goToPage(pageNumber: 1);
-        }
-        return KeyEventResult.handled;
-      case LogicalKeyboardKey.end:
-        if (isDown) {
-          _goToPage(pageNumber: _document!.pages.length, anchor: widget.params.pageAnchorEnd);
-        }
-        return KeyEventResult.handled;
-      case LogicalKeyboardKey.equal:
-        if (isDown && _isCommandKeyPressed) {
-          _zoomUp();
-        }
-        return KeyEventResult.handled;
-      case LogicalKeyboardKey.minus:
-        if (isDown && _isCommandKeyPressed) {
-          _zoomDown();
-        }
-        return KeyEventResult.handled;
-      case LogicalKeyboardKey.arrowDown:
-        if (isDown) {
-          _goToManipulated((m) => m.translate(0.0, -widget.params.scrollByArrowKey));
-        }
-        return KeyEventResult.handled;
-      case LogicalKeyboardKey.arrowUp:
-        if (isDown) {
-          _goToManipulated((m) => m.translate(0.0, widget.params.scrollByArrowKey));
-        }
-        return KeyEventResult.handled;
-      case LogicalKeyboardKey.arrowLeft:
-        if (isDown) {
-          _goToManipulated((m) => m.translate(widget.params.scrollByArrowKey, 0.0));
-        }
-        return KeyEventResult.handled;
-      case LogicalKeyboardKey.arrowRight:
-        if (isDown) {
-          _goToManipulated((m) => m.translate(-widget.params.scrollByArrowKey, 0.0));
-        }
-        return KeyEventResult.handled;
+  bool _onKey(PdfViewerKeyHandlerParams params, LogicalKeyboardKey key, bool isRealKeyPress) {
+    final result = widget.params.onKey?.call(params, key, isRealKeyPress);
+    if (result != null) {
+      return result;
     }
-    return KeyEventResult.ignored;
+    final duration = widget.params.keyHandlerParams.repeatInterval;
+    switch (key) {
+      case LogicalKeyboardKey.pageUp:
+        _goToPage(pageNumber: (_gotoTargetPageNumber ?? _pageNumber!) - 1, duration: duration);
+        return true;
+      case LogicalKeyboardKey.pageDown:
+      case LogicalKeyboardKey.space:
+        _goToPage(pageNumber: (_gotoTargetPageNumber ?? _pageNumber!) + 1, duration: duration);
+        return true;
+      case LogicalKeyboardKey.home:
+        _goToPage(pageNumber: 1, duration: duration);
+        return true;
+      case LogicalKeyboardKey.end:
+        _goToPage(pageNumber: _document!.pages.length, anchor: widget.params.pageAnchorEnd, duration: duration);
+        return true;
+      case LogicalKeyboardKey.equal:
+        if (isCommandKeyPressed) {
+          _zoomUp(duration: duration);
+          return true;
+        }
+      case LogicalKeyboardKey.minus:
+        if (isCommandKeyPressed) {
+          _zoomDown(duration: duration);
+          return true;
+        }
+      case LogicalKeyboardKey.arrowDown:
+        _goToManipulated((m) => m.translate(0.0, -widget.params.scrollByArrowKey));
+        return true;
+      case LogicalKeyboardKey.arrowUp:
+        _goToManipulated((m) => m.translate(0.0, widget.params.scrollByArrowKey));
+        return true;
+      case LogicalKeyboardKey.arrowLeft:
+        _goToManipulated((m) => m.translate(widget.params.scrollByArrowKey, 0.0));
+        return true;
+      case LogicalKeyboardKey.arrowRight:
+        _goToManipulated((m) => m.translate(-widget.params.scrollByArrowKey, 0.0));
+        return true;
+    }
+    return false;
   }
 
-  Future<void> _goToManipulated(void Function(Matrix4 m) manipulate) async {
+  void _goToManipulated(void Function(Matrix4 m) manipulate) {
     final m = _txController.value.clone();
     manipulate(m);
     _txController.value = m;
-  }
-
-  bool _updateViewSizeAndCoverScale(Size viewSize) {
-    if (_viewSize != viewSize) {
-      final oldSize = _viewSize;
-      _viewSize = viewSize;
-      final s1 = viewSize.width / _layout!.documentSize.width;
-      final s2 = viewSize.height / _layout!.documentSize.height;
-      _coverScale = max(s1, s2);
-      if (_controller != null && widget.params.onViewSizeChanged != null) {
-        widget.params.onViewSizeChanged!(viewSize, oldSize, _controller!);
-      }
-      return true;
-    }
-    return false;
   }
 
   Rect get _visibleRect => _txController.value.calcVisibleRect(_viewSize!);
@@ -585,16 +552,8 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
   /// Set the current page number.
   ///
   /// Please note that the function does not scroll/zoom to the specified page but changes the current page number.
-  void _setCurrentPageNumber(int pageNumber) {
+  void _setCurrentPageNumber(int? pageNumber, {bool doSetState = false}) {
     _gotoTargetPageNumber = pageNumber;
-    _setCurrentPageNumberInternal(_gotoTargetPageNumber, doSetState: true);
-  }
-
-  void _determineCurrentPage() {
-    _setCurrentPageNumberInternal(_guessCurrentPage());
-  }
-
-  void _setCurrentPageNumberInternal(int? pageNumber, {bool doSetState = false}) {
     if (pageNumber != null && _pageNumber != pageNumber) {
       _pageNumber = pageNumber;
       if (doSetState) {
@@ -606,7 +565,7 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
     }
   }
 
-  int? _guessCurrentPage() {
+  int? _guessCurrentPageNumber() {
     if (widget.params.calculateCurrentPageNumber != null) {
       return widget.params.calculateCurrentPageNumber!(_visibleRect, _layout!.pageLayouts, _controller!);
     }
@@ -640,10 +599,31 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
     return pageNumber;
   }
 
-  bool _calcAlternativeFitScale() {
-    if (_pageNumber != null) {
+  /// Returns true if page layouts are changed.
+  bool _relayoutPages() {
+    if (_document == null) {
+      _layout = null;
+      return false;
+    }
+    final newLayout = (widget.params.layoutPages ?? _layoutPages)(_document!.pages, widget.params);
+    if (_layout == newLayout) {
+      return false;
+    }
+
+    _layout = newLayout;
+    return true;
+  }
+
+  void _calcCoverFitScale() {
+    if (_viewSize != null) {
+      final s1 = _viewSize!.width / _layout!.documentSize.width;
+      final s2 = _viewSize!.height / _layout!.documentSize.height;
+      _coverScale = max(s1, s2);
+    }
+    final pageNumber = _pageNumber ?? _gotoTargetPageNumber;
+    if (pageNumber != null) {
       final params = widget.params;
-      final rect = _layout!.pageLayouts[_pageNumber! - 1];
+      final rect = _layout!.pageLayouts[pageNumber - 1];
       final m2 = params.margin * 2;
       _alternativeFitScale = min((_viewSize!.width - m2) / rect.width, (_viewSize!.height - m2) / rect.height);
     } else {
@@ -651,16 +631,12 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
     }
     if (_coverScale == null) {
       _minScale = _defaultMinScale;
-      return false;
+      return;
     }
-
     _minScale =
-        !widget.params.useAlternativeFitScaleAsMinScale
+        !widget.params.useAlternativeFitScaleAsMinScale || _alternativeFitScale == null
             ? widget.params.minScale
-            : _alternativeFitScale == null
-            ? _coverScale!
-            : min(_coverScale!, _alternativeFitScale!);
-    return _alternativeFitScale != null;
+            : _alternativeFitScale!;
   }
 
   void _calcZoomStopTable() {
@@ -990,11 +966,6 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
     }
   }
 
-  void _relayoutPages() {
-    if (_document == null) return;
-    _layout = (widget.params.layoutPages ?? _layoutPages)(_document!.pages, widget.params);
-  }
-
   PdfPageLayout _layoutPages(List<PdfPage> pages, PdfViewerParams params) {
     final width = pages.fold(0.0, (w, p) => max(w, p.width)) + params.margin * 2;
 
@@ -1148,14 +1119,19 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
   void _onWheelDelta(Offset delta) {
     _startInteraction();
     final m = _txController.value.clone();
-    m.translate(-delta.dx * widget.params.scrollByMouseWheel!, -delta.dy * widget.params.scrollByMouseWheel!);
+    final dx = -delta.dx * widget.params.scrollByMouseWheel!;
+    final dy = -delta.dy * widget.params.scrollByMouseWheel!;
+    if (widget.params.scrollHorizontallyByMouseWheel) {
+      m.translate(dy, dx);
+    } else {
+      m.translate(dx, dy);
+    }
     _txController.value = m;
     _stopInteraction();
   }
 
   /// Restrict matrix to the safe range.
   Matrix4 _makeMatrixInSafeRange(Matrix4 newValue) {
-    _updateViewSizeAndCoverScale(_viewSize!);
     if (widget.params.normalizeMatrix != null) {
       return widget.params.normalizeMatrix!(newValue, _viewSize!, _layout!, _controller);
     }
@@ -1163,14 +1139,17 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
   }
 
   Matrix4 _normalizeMatrix(Matrix4 newValue) {
-    final position = newValue.calcPosition(_viewSize!);
-    final newZoom = widget.params.boundaryMargin != null ? newValue.zoom : max(newValue.zoom, minScale);
-    final hw = _viewSize!.width / 2 / newZoom;
-    final hh = _viewSize!.height / 2 / newZoom;
-    final x = position.dx.range(hw, _layout!.documentSize.width - hw);
-    final y = position.dy.range(hh, _layout!.documentSize.height - hh);
+    final layout = _layout;
+    final viewSize = _viewSize;
+    if (layout == null || viewSize == null) return newValue;
+    final position = newValue.calcPosition(viewSize);
+    final newZoom = max(newValue.zoom, minScale);
+    final hw = viewSize.width / 2 / newZoom;
+    final hh = viewSize.height / 2 / newZoom;
+    final x = position.dx.range(hw, layout.documentSize.width - hw);
+    final y = position.dy.range(hh, layout.documentSize.height - hh);
 
-    return _calcMatrixFor(Offset(x, y), zoom: newZoom, viewSize: _viewSize!);
+    return _calcMatrixFor(Offset(x, y), zoom: newZoom, viewSize: viewSize).scaled(1.0, 1.0, newZoom);
   }
 
   /// Calculate matrix to center the specified position.
@@ -1195,40 +1174,49 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
     return _calcMatrixFor(rect.center, zoom: zoom, viewSize: _viewSize!);
   }
 
-  Matrix4 _calcMatrixForArea({required Rect rect, PdfPageAnchor? anchor}) {
-    anchor ??= widget.params.pageAnchor;
-    final visibleRect = _visibleRect;
-    final w = min(rect.width, visibleRect.width);
-    final h = min(rect.height, visibleRect.height);
+  Matrix4 _calcMatrixForArea({required Rect rect, double? zoomMax, double? margin, PdfPageAnchor? anchor}) =>
+      _calcMatrixForRect(
+        _calcRectForArea(rect: rect, anchor: anchor ?? widget.params.pageAnchor),
+        zoomMax: zoomMax,
+        margin: margin,
+      );
+
+  // The function calculate the rectangle which should be shown in the view.
+  //
+  // If the rect is smaller than the view size, it will
+  Rect _calcRectForArea({required Rect rect, required PdfPageAnchor anchor}) {
+    final viewSize = _visibleRect.size;
+    final w = min(rect.width, viewSize.width);
+    final h = min(rect.height, viewSize.height);
     switch (anchor) {
       case PdfPageAnchor.top:
-        return _calcMatrixForRect((rect.topLeft) & Size(rect.width, h));
+        return Rect.fromLTWH(rect.left, rect.top, rect.width, h);
       case PdfPageAnchor.left:
-        return _calcMatrixForRect((rect.topLeft) & Size(w, rect.height));
+        return Rect.fromLTWH(rect.left, rect.top, w, rect.height);
       case PdfPageAnchor.right:
-        return _calcMatrixForRect(Rect.fromLTWH(rect.right - w, rect.top, w, rect.height));
+        return Rect.fromLTWH(rect.right - w, rect.top, w, rect.height);
       case PdfPageAnchor.bottom:
-        return _calcMatrixForRect(Rect.fromLTWH(rect.left, rect.bottom - h, rect.width, h));
+        return Rect.fromLTWH(rect.left, rect.bottom - h, rect.width, h);
       case PdfPageAnchor.topLeft:
-        return _calcMatrixForRect((rect.topLeft) & visibleRect.size);
+        return Rect.fromLTWH(rect.left, rect.top, viewSize.width, viewSize.height);
       case PdfPageAnchor.topCenter:
-        return _calcMatrixForRect(rect.topCenter & visibleRect.size);
+        return Rect.fromLTWH(rect.topCenter.dx - w / 2, rect.top, viewSize.width, viewSize.height);
       case PdfPageAnchor.topRight:
-        return _calcMatrixForRect((rect.topRight) & visibleRect.size);
+        return Rect.fromLTWH(rect.topRight.dx - w, rect.top, viewSize.width, viewSize.height);
       case PdfPageAnchor.centerLeft:
-        return _calcMatrixForRect(rect.centerLeft & visibleRect.size);
+        return Rect.fromLTWH(rect.left, rect.center.dy - h / 2, viewSize.width, viewSize.height);
       case PdfPageAnchor.center:
-        return _calcMatrixForRect(rect.center & visibleRect.size);
+        return Rect.fromLTWH(rect.center.dx - w / 2, rect.center.dy - h / 2, viewSize.width, viewSize.height);
       case PdfPageAnchor.centerRight:
-        return _calcMatrixForRect(rect.centerRight & visibleRect.size);
+        return Rect.fromLTWH(rect.right - w, rect.center.dy - h / 2, viewSize.width, viewSize.height);
       case PdfPageAnchor.bottomLeft:
-        return _calcMatrixForRect((rect.bottomLeft) & visibleRect.size);
+        return Rect.fromLTWH(rect.left, rect.bottom - h, viewSize.width, viewSize.height);
       case PdfPageAnchor.bottomCenter:
-        return _calcMatrixForRect(rect.bottomCenter & visibleRect.size);
+        return Rect.fromLTWH(rect.center.dx - w / 2, rect.bottom - h, viewSize.width, viewSize.height);
       case PdfPageAnchor.bottomRight:
-        return _calcMatrixForRect((rect.bottomRight) & visibleRect.size);
+        return Rect.fromLTWH(rect.right - w, rect.bottom - h, viewSize.width, viewSize.height);
       case PdfPageAnchor.all:
-        return _calcMatrixForRect(rect);
+        return rect;
     }
   }
 
@@ -1337,7 +1325,7 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
     } on TickerCanceled {
       // expected
     } finally {
-      _animGoTo!.removeListener(update);
+      _animGoTo?.removeListener(update);
     }
   }
 
@@ -1386,11 +1374,13 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
     if (pageNumber < 1) {
       targetPageNumber = 1;
     } else if (pageNumber != 1 && pageNumber >= pageCount) {
-      targetPageNumber = pageCount;
+      targetPageNumber = pageNumber = pageCount;
       anchor ??= widget.params.pageAnchorEnd;
     } else {
       targetPageNumber = pageNumber;
     }
+    _gotoTargetPageNumber = pageNumber;
+
     await _goTo(_calcMatrixForPage(pageNumber: targetPageNumber, anchor: anchor), duration: duration);
     _setCurrentPageNumber(targetPageNumber);
   }
@@ -1401,6 +1391,7 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
     PdfPageAnchor? anchor,
     Duration duration = const Duration(milliseconds: 200),
   }) async {
+    _gotoTargetPageNumber = pageNumber;
     await _goTo(_calcMatrixForRectInsidePage(pageNumber: pageNumber, rect: rect, anchor: anchor), duration: duration);
     _setCurrentPageNumber(pageNumber);
   }
@@ -1408,6 +1399,9 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
   Future<bool> _goToDest(PdfDest? dest, {Duration duration = const Duration(milliseconds: 200)}) async {
     final m = _calcMatrixForDest(dest);
     if (m == null) return false;
+    if (dest != null) {
+      _gotoTargetPageNumber = dest.pageNumber;
+    }
     await _goTo(m, duration: duration);
     if (dest != null) {
       _setCurrentPageNumber(dest.pageNumber);
@@ -1431,7 +1425,7 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
       if (pageRect.contains(offset)) {
         return PdfPageHitTestResult(
           page: page,
-          offset: Offset(offset.dx - pageRect.left, pageRect.bottom - offset.dy) * page.height / pageRect.height,
+          offset: offset.translate(-pageRect.left, -pageRect.top).toPdfPoint(page: page, scaledPageSize: pageRect.size),
         );
       }
     }
@@ -1441,16 +1435,23 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
   double _getNextZoom({bool loop = true}) => _findNextZoomStop(_currentZoom, zoomUp: true, loop: loop);
   double _getPreviousZoom({bool loop = true}) => _findNextZoomStop(_currentZoom, zoomUp: false, loop: loop);
 
-  Future<void> _setZoom(Offset position, double zoom) =>
-      _goTo(_calcMatrixFor(position, zoom: zoom, viewSize: _viewSize!));
+  Future<void> _setZoom(Offset position, double zoom, {Duration duration = const Duration(milliseconds: 200)}) =>
+      _goTo(_calcMatrixFor(position, zoom: zoom, viewSize: _viewSize!), duration: duration);
 
   Offset get _centerPosition => _txController.value.calcPosition(_viewSize!);
 
-  Future<void> _zoomUp({bool loop = false, Offset? zoomCenter}) =>
-      _setZoom(zoomCenter ?? _centerPosition, _getNextZoom(loop: loop));
+  Future<void> _zoomUp({
+    bool loop = false,
+    Offset? zoomCenter,
+    Duration duration = const Duration(milliseconds: 200),
+  }) => _setZoom(zoomCenter ?? _centerPosition, _getNextZoom(loop: loop), duration: duration);
 
-  Future<void> _zoomDown({bool loop = false, Offset? zoomCenter}) async {
-    await _setZoom(zoomCenter ?? _centerPosition, _getPreviousZoom(loop: loop));
+  Future<void> _zoomDown({
+    bool loop = false,
+    Offset? zoomCenter,
+    Duration duration = const Duration(milliseconds: 200),
+  }) async {
+    await _setZoom(zoomCenter ?? _centerPosition, _getPreviousZoom(loop: loop), duration: duration);
   }
 
   RenderBox? get _renderBox {
@@ -1537,6 +1538,16 @@ class PdfPageLayout {
   PdfPageLayout({required this.pageLayouts, required this.documentSize});
   final List<Rect> pageLayouts;
   final Size documentSize;
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other is! PdfPageLayout) return false;
+    return listEquals(pageLayouts, other.pageLayouts) && documentSize == other.documentSize;
+  }
+
+  @override
+  int get hashCode => pageLayouts.hashCode ^ documentSize.hashCode;
 }
 
 /// Represents the result of the hit test on the page.
@@ -1547,7 +1558,7 @@ class PdfPageHitTestResult {
   final PdfPage page;
 
   /// The offset in the PDF page coordinates; the origin is at the bottom-left corner.
-  final Offset offset;
+  final PdfPoint offset;
 }
 
 /// Controls associated [PdfViewer].
@@ -1680,9 +1691,6 @@ class PdfViewerController extends ValueListenable<Matrix4> {
 
     addListener(handler);
   }
-
-  /// Forcibly relayout the pages.
-  void relayout() => _state._relayout();
 
   /// Go to the specified area.
   ///
@@ -1865,12 +1873,17 @@ class PdfViewerController extends ValueListenable<Matrix4> {
 
   double get currentZoom => value.zoom;
 
-  Future<void> setZoom(Offset position, double zoom) => _state._setZoom(position, zoom);
+  Future<void> setZoom(Offset position, double zoom, {Duration duration = const Duration(milliseconds: 200)}) =>
+      _state._setZoom(position, zoom, duration: duration);
 
-  Future<void> zoomUp({bool loop = false, Offset? zoomCenter}) => _state._zoomUp(loop: loop, zoomCenter: zoomCenter);
+  Future<void> zoomUp({bool loop = false, Offset? zoomCenter, Duration duration = const Duration(milliseconds: 200)}) =>
+      _state._zoomUp(loop: loop, zoomCenter: zoomCenter, duration: duration);
 
-  Future<void> zoomDown({bool loop = false, Offset? zoomCenter}) =>
-      _state._zoomDown(loop: loop, zoomCenter: zoomCenter);
+  Future<void> zoomDown({
+    bool loop = false,
+    Offset? zoomCenter,
+    Duration duration = const Duration(milliseconds: 200),
+  }) => _state._zoomDown(loop: loop, zoomCenter: zoomCenter, duration: duration);
 
   RenderBox? get renderBox => _state._renderBox;
 
@@ -1985,17 +1998,13 @@ extension RectExt on Rect {
 /// Create a [CustomPainter] from a paint function.
 class _CustomPainter extends CustomPainter {
   /// Create a [CustomPainter] from a paint function.
-  const _CustomPainter.fromFunctions(this.paintFunction, {this.hitTestFunction});
+  const _CustomPainter.fromFunctions(this.paintFunction);
   final void Function(ui.Canvas canvas, ui.Size size) paintFunction;
-  final bool Function(Offset position)? hitTestFunction;
   @override
   void paint(ui.Canvas canvas, ui.Size size) => paintFunction(canvas, size);
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
-
-  @override
-  bool? hitTest(ui.Offset position) => hitTestFunction == null ? super.hitTest(position) : hitTestFunction!(position);
 }
 
 Widget _defaultErrorBannerBuilder(
@@ -2050,7 +2059,7 @@ class _CanvasLinkPainter {
     if (links == null) return null;
     for (final link in links) {
       for (final rect in link.rects) {
-        if (rect.containsOffset(hitResult.offset)) {
+        if (rect.containsPoint(hitResult.offset)) {
           return link;
         }
       }
@@ -2118,7 +2127,7 @@ class _CanvasLinkPainter {
 
     final paint =
         Paint()
-          ..color = _state.widget.params.linkHandlerParams?.linkColor ?? Colors.blue.withOpacity(0.2)
+          ..color = _state.widget.params.linkHandlerParams?.linkColor ?? Colors.blue.withAlpha(50)
           ..style = PaintingStyle.fill;
     for (final link in links) {
       for (final rect in link.rects) {
@@ -2126,5 +2135,87 @@ class _CanvasLinkPainter {
         canvas.drawRect(rectLink, paint);
       }
     }
+  }
+}
+
+class _PdfViewerKeyHandler extends StatefulWidget {
+  const _PdfViewerKeyHandler({required this.child, required this.onKeyRepeat, required this.params});
+
+  /// Called on every key repeat.
+  ///
+  /// See [PdfViewerOnKeyCallback] for the parameters.
+  final bool Function(PdfViewerKeyHandlerParams, LogicalKeyboardKey, bool) onKeyRepeat;
+  final PdfViewerKeyHandlerParams params;
+  final Widget child;
+
+  @override
+  _PdfViewerKeyHandlerState createState() => _PdfViewerKeyHandlerState();
+}
+
+class _PdfViewerKeyHandlerState extends State<_PdfViewerKeyHandler> {
+  Timer? _timer;
+  LogicalKeyboardKey? _currentKey;
+
+  void _startRepeating(FocusNode node, LogicalKeyboardKey key) {
+    _currentKey = key;
+
+    // Initial delay before starting to repeat
+    _timer = Timer(widget.params.initialDelay, () {
+      // Start repeating at the specified interval
+      _timer = Timer.periodic(widget.params.repeatInterval, (_) {
+        widget.onKeyRepeat(widget.params, _currentKey!, false);
+      });
+    });
+  }
+
+  void _stopRepeating() {
+    _timer?.cancel();
+    _timer = null;
+    _currentKey = null;
+  }
+
+  @override
+  void dispose() {
+    _stopRepeating();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Focus(
+      focusNode: widget.params.focusNode,
+      parentNode: widget.params.parentNode,
+      autofocus: widget.params.autofocus,
+      canRequestFocus: widget.params.canRequestFocus,
+      onKeyEvent: (node, event) {
+        if (event is KeyDownEvent) {
+          // Key pressed down
+          if (_currentKey == null) {
+            if (widget.onKeyRepeat(widget.params, event.logicalKey, true)) {
+              _startRepeating(node, event.logicalKey);
+              return KeyEventResult.handled;
+            }
+          }
+        } else if (event is KeyUpEvent) {
+          // Key released
+          if (_currentKey == event.logicalKey) {
+            _stopRepeating();
+            return KeyEventResult.handled;
+          }
+        }
+        return KeyEventResult.ignored;
+      },
+      child: Builder(
+        builder: (context) {
+          final focusNode = Focus.of(context);
+          return ListenableBuilder(
+            listenable: focusNode,
+            builder: (context, _) {
+              return widget.child;
+            },
+          );
+        },
+      ),
+    );
   }
 }
