@@ -1,6 +1,7 @@
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../pdfrx.dart';
 
@@ -42,6 +43,7 @@ class PdfViewerParams {
     this.onPageChanged,
     this.getPageRenderingScale,
     this.scrollByMouseWheel = 0.2,
+    this.scrollHorizontallyByMouseWheel = false,
     this.enableKeyboardNavigation = true,
     this.scrollByArrowKey = 25.0,
     this.maxImageBytesCachedOnMemory = 100 * 1024 * 1024,
@@ -58,6 +60,8 @@ class PdfViewerParams {
     this.onTextSelectionChange,
     this.selectableRegionInjector,
     this.perPageSelectableRegionInjector,
+    this.onKey,
+    this.keyHandlerParams = const PdfViewerKeyHandlerParams(),
     this.forceReload = false,
   });
 
@@ -321,6 +325,9 @@ class PdfViewerParams {
   /// null to disable scroll-by-mouse-wheel.
   final double? scrollByMouseWheel;
 
+  /// If true, the scroll direction is horizontal when the mouse wheel is scrolled in primary direction.
+  final bool scrollHorizontallyByMouseWheel;
+
   /// Enable keyboard navigation. The default is true.
   final bool enableKeyboardNavigation;
 
@@ -490,6 +497,14 @@ class PdfViewerParams {
   /// You can even enable both of [selectableRegionInjector] and [perPageSelectableRegionInjector] at the same time.
   final PdfPerPageSelectableRegionInjector? perPageSelectableRegionInjector;
 
+  /// Function to handle key events.
+  ///
+  /// See [PdfViewerOnKeyCallback] for the details.
+  final PdfViewerOnKeyCallback? onKey;
+
+  /// Parameters to customize key handling.
+  final PdfViewerKeyHandlerParams keyHandlerParams;
+
   /// Force reload the viewer.
   ///
   /// Normally whether to reload the viewer is determined by the changes of the parameters but
@@ -523,6 +538,7 @@ class PdfViewerParams {
         other.scaleEnabled != scaleEnabled ||
         other.interactionEndFrictionCoefficient != interactionEndFrictionCoefficient ||
         other.scrollByMouseWheel != scrollByMouseWheel ||
+        other.scrollHorizontallyByMouseWheel != scrollHorizontallyByMouseWheel ||
         other.enableKeyboardNavigation != enableKeyboardNavigation ||
         other.scrollByArrowKey != scrollByArrowKey ||
         other.horizontalCacheExtent != horizontalCacheExtent ||
@@ -563,6 +579,7 @@ class PdfViewerParams {
         other.onPageChanged == onPageChanged &&
         other.getPageRenderingScale == getPageRenderingScale &&
         other.scrollByMouseWheel == scrollByMouseWheel &&
+        other.scrollHorizontallyByMouseWheel == scrollHorizontallyByMouseWheel &&
         other.enableKeyboardNavigation == enableKeyboardNavigation &&
         other.scrollByArrowKey == scrollByArrowKey &&
         other.horizontalCacheExtent == horizontalCacheExtent &&
@@ -578,6 +595,8 @@ class PdfViewerParams {
         other.onTextSelectionChange == onTextSelectionChange &&
         other.selectableRegionInjector == selectableRegionInjector &&
         other.perPageSelectableRegionInjector == perPageSelectableRegionInjector &&
+        other.onKey == onKey &&
+        other.keyHandlerParams == keyHandlerParams &&
         other.forceReload == forceReload;
   }
 
@@ -612,6 +631,7 @@ class PdfViewerParams {
         onPageChanged.hashCode ^
         getPageRenderingScale.hashCode ^
         scrollByMouseWheel.hashCode ^
+        scrollHorizontallyByMouseWheel.hashCode ^
         enableKeyboardNavigation.hashCode ^
         scrollByArrowKey.hashCode ^
         horizontalCacheExtent.hashCode ^
@@ -627,6 +647,8 @@ class PdfViewerParams {
         onTextSelectionChange.hashCode ^
         selectableRegionInjector.hashCode ^
         perPageSelectableRegionInjector.hashCode ^
+        onKey.hashCode ^
+        keyHandlerParams.hashCode ^
         forceReload.hashCode;
   }
 }
@@ -830,3 +852,65 @@ class PdfLinkHandlerParams {
 
 /// Custom painter for the page links.
 typedef PdfLinkCustomPagePainter = void Function(ui.Canvas canvas, Rect pageRect, PdfPage page, List<PdfLink> links);
+
+/// Function to handle key events.
+///
+/// The function can return one of the following values:
+/// Returned value | Description
+/// -------------- | -----------
+/// true           | The key event is not handled by any other handlers.
+/// false          | The key event is ignored and propagated to other handlers.
+/// null           | The key event is handled by the default handler which handles several key events such as arrow keys and page up/down keys. The other keys are just ignored and propagated to other handlers.
+///
+/// [params] is the key handler parameters.
+/// [key] is the key event.
+/// [isRealKeyPress] is true if the key event is the actual key press event. It is false if the key event is generated
+/// by key repeat feature.
+typedef PdfViewerOnKeyCallback =
+    bool? Function(PdfViewerKeyHandlerParams params, LogicalKeyboardKey key, bool isRealKeyPress);
+
+/// Parameters for the built-in key handler.
+///
+/// [initialDelay] is the initial delay before the key repeat starts.
+/// [repeatInterval] is the interval between key repeats.
+///
+/// For [autofocus], [canRequestFocus], [focusNode], and [parentNode],
+/// please refer to the documentation of [Focus] widget.
+class PdfViewerKeyHandlerParams {
+  const PdfViewerKeyHandlerParams({
+    this.initialDelay = const Duration(milliseconds: 500),
+    this.repeatInterval = const Duration(milliseconds: 100),
+    this.autofocus = false,
+    this.canRequestFocus = true,
+    this.focusNode,
+    this.parentNode,
+  });
+
+  final Duration initialDelay;
+  final Duration repeatInterval;
+  final bool autofocus;
+  final bool canRequestFocus;
+  final FocusNode? focusNode;
+  final FocusNode? parentNode;
+
+  @override
+  operator ==(covariant PdfViewerKeyHandlerParams other) {
+    if (identical(this, other)) return true;
+
+    return other.initialDelay == initialDelay &&
+        other.repeatInterval == repeatInterval &&
+        other.autofocus == autofocus &&
+        other.canRequestFocus == canRequestFocus &&
+        other.focusNode == focusNode &&
+        other.parentNode == parentNode;
+  }
+
+  @override
+  int get hashCode =>
+      initialDelay.hashCode ^
+      repeatInterval.hashCode ^
+      autofocus.hashCode ^
+      canRequestFocus.hashCode ^
+      focusNode.hashCode ^
+      parentNode.hashCode;
+}
