@@ -315,14 +315,14 @@ packages:
       path: "../.."
       relative: true
     source: path
-    version: "1.1.27"
+    version: "1.1.30"
   pdfrx_wasm:
     dependency: "direct main"
     description:
       path: "../../wasm/pdfrx_wasm"
       relative: true
     source: path
-    version: "1.1.9"
+    version: "1.1.10"
   platform:
     dependency: transitive
     description:

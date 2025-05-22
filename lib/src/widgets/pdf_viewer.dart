@@ -388,7 +388,7 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
                         constrained: false,
                         boundaryMargin: widget.params.boundaryMargin ?? const EdgeInsets.all(double.infinity),
                         maxScale: widget.params.maxScale,
-                        minScale: _alternativeFitScale != null ? _alternativeFitScale! / 2 : minScale,
+                        minScale: minScale,
                         panAxis: widget.params.panAxis,
                         panEnabled: widget.params.panEnabled,
                         scaleEnabled: widget.params.scaleEnabled,
@@ -421,6 +421,7 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
   }
 
   void _updateLayout(Size viewSize) {
+    if (viewSize.height <= 0) return; // For fix blank pdf when restore window from minimize on Windows
     final currentPageNumber = _guessCurrentPageNumber();
     final oldSize = _viewSize;
     final isViewSizeChanged = oldSize != viewSize;
@@ -566,10 +567,11 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
   }
 
   int? _guessCurrentPageNumber() {
+    if (_layout == null || _viewSize == null) return null;
+    
     if (widget.params.calculateCurrentPageNumber != null) {
       return widget.params.calculateCurrentPageNumber!(_visibleRect, _layout!.pageLayouts, _controller!);
     }
-    if (_layout == null) return null;
 
     final visibleRect = _visibleRect;
     double calcIntersectionArea(int pageNumber) {
@@ -580,7 +582,9 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
       return area / (rect.width * rect.height);
     }
 
-    if (_gotoTargetPageNumber != null) {
+    if (_gotoTargetPageNumber != null &&
+        _gotoTargetPageNumber! > 0 &&
+        _gotoTargetPageNumber! <= _document!.pages.length) {
       final ratio = calcIntersectionArea(_gotoTargetPageNumber!);
       if (ratio > .2) return _gotoTargetPageNumber;
     }
@@ -626,6 +630,9 @@ class _PdfViewerState extends State<PdfViewer> with SingleTickerProviderStateMix
       final rect = _layout!.pageLayouts[pageNumber - 1];
       final m2 = params.margin * 2;
       _alternativeFitScale = min((_viewSize!.width - m2) / rect.width, (_viewSize!.height - m2) / rect.height);
+      if (_alternativeFitScale! <= 0) {
+        _alternativeFitScale = null;
+      }
     } else {
       _alternativeFitScale = null;
     }

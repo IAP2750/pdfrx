@@ -1,6 +1,24 @@
+# 1.1.30
+
+- MERGED: PR #364 fix: blank pdf on Windows when restore window from minimize
+- Update example's app/build.gradle to support Android's 16KB page size
+
+# 1.1.29
+
+- FIXED: [#363](https://github.com/espresso3389/pdfrx/issues/363)
+  - FIXED: pdfium-wasm-module-url on HTML meta tag overrides value explicitly set to Pdfrx.pdfiumWasmModulesUrl
+  - Improves pdfium_worker.js/pdfium.wasm loading path resolution logic to allow relative paths
+
+# 1.1.28
+
+- WIP: zoom ratio calculation updates
+- goToPage throws array index out of bounds error if the page number is out of range
+- PDFium WASM 138.0.7162.0
+- Remove debug print
+
 # 1.1.27
 
-- Apply a proposed fix for #134; but I' not sure if it works well or not. Personally, I don't feel any difference...
+- Apply a proposed fix for #134; but I'm not sure if it works well or not. Personally, I don't feel any difference...
 
 # 1.1.26
 

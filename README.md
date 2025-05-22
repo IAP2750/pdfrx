@@ -52,7 +52,7 @@ Add this to your package's `pubspec.yaml` file and execute `flutter pub get`:
 
 ```yaml
 dependencies:
-  pdfrx: ^1.1.27
+  pdfrx: ^1.1.30
 ```
 
 ### Note for Windows
@@ -64,7 +64,7 @@ Without this, you may encounter errors [like this](https://github.com/espresso33
 
 ### Pdfium WASM support on Web
 
-pdfrx now supports Pdfium WASM on Web, for more informatin, see [Enable Pdfium WASM support](https://github.com/espresso3389/pdfrx/wiki/Enable-Pdfium-WASM-support).
+pdfrx now supports Pdfium WASM on Web, for more information, see [Enable Pdfium WASM support](https://github.com/espresso3389/pdfrx/wiki/Enable-Pdfium-WASM-support).
 
 ### Deal with Password Protected PDF Files
 
