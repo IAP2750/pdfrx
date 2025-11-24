@@ -25,6 +25,7 @@
     "calloc",
     "CALRGB",
     "ccall",
+    "CGPDF",
     "Charcodes",
     "clippath",
     "cmap",
@@ -33,6 +34,7 @@
     "COLORTYPE",
     "COMBOBOX",
     "contextmenu",
+    "coregraphics",
     "credentialless",
     "Cupertino",
     "cwrap",
@@ -62,6 +64,7 @@
     "FILEATTACHMENT",
     "FILEHANDLER",
     "FILEIDTYPE",
+    "FILEWRITE",
     "fillmode",
     "findwhat",
     "FITBH",
@@ -83,6 +86,7 @@
     "FPDFPAGE",
     "fpdfview",
     "FREETEXT",
+    "FSDK",
     "FXCT",
     "getdents",
     "glyphpath",
@@ -125,6 +129,7 @@
     "maxage",
     "microtask",
     "MOVETO",
+    "Naskh",
     "NATIVETEXT",
     "NESW",
     "newfstatat",
@@ -153,6 +158,7 @@
     "POLYLINE",
     "PRINTERMARK",
     "PRINTMODE",
+    "Pthread",
     "pubspec",
     "QUADPOINTSF",
     "RADIOBUTTON",
@@ -169,6 +175,7 @@
     "SCHHANDLE",
     "Schyler",
     "scrollable",
+    "Scrollables",
     "selectable",
     "selectables",
     "SIZEF",
@@ -215,6 +222,7 @@
     "xobject",
     "YESNO",
     "YESNOCANCEL",
+    "YMDHMS",
     "ZapfDingbats"
   ],
   "editor.codeActionsOnSave": {
@@ -302,5 +310,15 @@
         120
     ]
   },
+  "[swift]": {
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "vknabel.vscode-swiftformat",
+    "editor.rulers": [
+        120
+    ]
+  },
+  "swiftformat.enable": true,
+  "swiftformat.onlyEnableOnSwiftPMProjects": false,
+  "swiftformat.onlyEnableWithConfig": false,
   "java.jdt.ls.vmargs": "-XX:+UseParallelGC -XX:GCTimeRatio=4 -XX:AdaptiveSizePolicyWeight=90 -Dsun.zip.disableMemoryMapping=true -Xmx2G -Xms100m -Xlog:disable"
 }

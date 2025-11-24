@@ -1,6 +1,6 @@
 import 'dart:js_interop';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:web/web.dart' as web;
 
@@ -8,6 +8,7 @@ import '../../../pdfrx.dart';
 import '../../wasm/pdfrx_wasm.dart';
 
 final isApple = false;
+final isAndroid = false;
 final isWindows = false;
 
 /// Whether the current platform is mobile (Android, iOS, or Fuchsia).
@@ -21,6 +22,9 @@ void setClipboardData(String text) {
   web.window.navigator.clipboard.writeText(text);
 }
 
+/// Gets the cache directory path for the current platform.
+///
+/// For web, this function throws an [UnimplementedError] since there is no temporary directory available.
 Future<String> getCacheDirectory() async => throw UnimplementedError('No temporary directory available for web.');
 
 /// Override for the [PdfrxEntryFunctions] for web platforms to use WASM implementation.
@@ -34,7 +38,7 @@ final _focusObject = <Object>{};
 ///
 /// For Web, this function currently setup "contextmenu" event listener to prevent the default context menu from
 /// appearing on right-click.
-void platformInitialize() {
+Future<void> platformInitialize() async {
   web.document.addEventListener(
     'contextmenu',
     ((web.Event event) {
@@ -47,6 +51,7 @@ void platformInitialize() {
       }
     }).toJS,
   );
+  await PdfrxEntryFunctions.instance.init();
 }
 
 /// Reports focus changes for the Web platform to handle right-click context menus.

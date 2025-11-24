@@ -3,7 +3,10 @@ import 'dart:js_interop';
 import 'dart:typed_data';
 import 'dart:ui_web' as ui_web;
 
+import 'package:crypto/crypto.dart';
 import 'package:pdfrx_engine/pdfrx_engine.dart';
+// ignore: implementation_imports
+import 'package:pdfrx_engine/src/pdf_page_proxies.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:synchronized/extension.dart';
 import 'package:web/web.dart' as web;
@@ -64,7 +67,8 @@ class PdfrxEntryFunctionsWasmImpl extends PdfrxEntryFunctions {
 
   bool _initialized = false;
 
-  Future<void> _init() async {
+  @override
+  Future<void> init() async {
     if (_initialized) return;
     await synchronized(() async {
       if (_initialized) return;
@@ -100,6 +104,12 @@ class PdfrxEntryFunctionsWasmImpl extends PdfrxEntryFunctions {
       );
       _initialized = true;
     });
+  }
+
+  @override
+  Future<T> suspendPdfiumWorkerDuringAction<T>(FutureOr<T> Function() action) async {
+    // We don't share PDFium wasm instance with other libraries, so no need to block calls anyway
+    return await action();
   }
 
   static String? _pdfiumWasmModulesUrlFromMetaTag() {
@@ -147,7 +157,7 @@ class PdfrxEntryFunctionsWasmImpl extends PdfrxEntryFunctions {
       passwordProvider: passwordProvider,
       firstAttemptByEmptyPassword: firstAttemptByEmptyPassword,
       useProgressiveLoading: useProgressiveLoading,
-      sourceName: 'asset:$name',
+      sourceName: 'asset%$name',
       allowDataOwnershipTransfer: true,
     );
   }
@@ -180,11 +190,18 @@ class PdfrxEntryFunctionsWasmImpl extends PdfrxEntryFunctions {
       'loadDocumentFromData',
       parameters: {'data': data, 'password': password, 'useProgressiveLoading': useProgressiveLoading},
     ),
-    sourceName: sourceName ?? 'data',
+    sourceName: sourceName ?? _sourceNameFromData(data),
     passwordProvider: passwordProvider,
     firstAttemptByEmptyPassword: firstAttemptByEmptyPassword,
     onDispose: onDispose,
   );
+
+  /// Generates a pseudo-unique source name for the given data using its SHA-256 hash.
+  ///
+  /// This may be sometimes slow for large data, so it's better to provide a meaningful source name when possible.
+  static String _sourceNameFromData(Uint8List data) {
+    return 'data%${sha256.convert(data)}';
+  }
 
   @override
   Future<PdfDocument> openFile(
@@ -197,7 +214,7 @@ class PdfrxEntryFunctionsWasmImpl extends PdfrxEntryFunctions {
       'loadDocumentFromUrl',
       parameters: {'url': filePath, 'password': password, 'useProgressiveLoading': useProgressiveLoading},
     ),
-    sourceName: filePath,
+    sourceName: 'file%$filePath',
     passwordProvider: passwordProvider,
     firstAttemptByEmptyPassword: firstAttemptByEmptyPassword,
     onDispose: null,
@@ -213,13 +230,14 @@ class PdfrxEntryFunctionsWasmImpl extends PdfrxEntryFunctions {
     bool preferRangeAccess = false,
     Map<String, String>? headers,
     bool withCredentials = false,
+    Duration? timeout,
   }) async {
     _PdfiumWasmCallback? progressCallbackReg;
     void cleanupCallbacks() => progressCallbackReg?.unregister();
 
     try {
       if (progressCallback != null) {
-        await _init();
+        await init();
         progressCallbackReg = _PdfiumWasmCallback.register(
           ((int bytesReceived, int bytesTotal) => progressCallback(bytesReceived, bytesTotal)).toJS,
         );
@@ -238,7 +256,7 @@ class PdfrxEntryFunctionsWasmImpl extends PdfrxEntryFunctions {
             'withCredentials': withCredentials,
           },
         ),
-        sourceName: uri.toString(),
+        sourceName: 'uri%$uri',
         passwordProvider: passwordProvider,
         firstAttemptByEmptyPassword: firstAttemptByEmptyPassword,
         onDispose: cleanupCallbacks,
@@ -256,9 +274,9 @@ class PdfrxEntryFunctionsWasmImpl extends PdfrxEntryFunctions {
     required bool firstAttemptByEmptyPassword,
     required void Function()? onDispose,
   }) async {
-    await _init();
+    await init();
 
-    for (int i = 0; ; i++) {
+    for (var i = 0; ; i++) {
       final String? password;
       if (firstAttemptByEmptyPassword && i == 0) {
         password = null;
@@ -285,29 +303,64 @@ class PdfrxEntryFunctionsWasmImpl extends PdfrxEntryFunctions {
   }
 
   @override
+  Future<PdfDocument> createNew({required String sourceName}) async {
+    await init();
+    final result = await _sendCommand('createNewDocument');
+    final errorCode = (result['errorCode'] as num?)?.toInt();
+    if (errorCode != null) {
+      throw StateError('Failed to create new document: ${result['errorCodeStr']} ($errorCode)');
+    }
+    return _PdfDocumentWasm._(result, sourceName: sourceName, disposeCallback: null);
+  }
+
+  @override
+  Future<PdfDocument> createFromJpegData(
+    Uint8List jpegData, {
+    required double width,
+    required double height,
+    required String sourceName,
+  }) async {
+    await init();
+    final jsData = jpegData.buffer.toJS;
+    final result = await _sendCommand(
+      'createDocumentFromJpegData',
+      parameters: {'jpegData': jsData, 'width': width, 'height': height},
+      transfer: [jsData].toJS,
+    );
+    final errorCode = (result['errorCode'] as num?)?.toInt();
+    if (errorCode != null) {
+      throw StateError('Failed to create document from JPEG data: ${result['errorCodeStr']} ($errorCode)');
+    }
+    return _PdfDocumentWasm._(result, sourceName: sourceName, disposeCallback: null);
+  }
+
+  @override
   Future<void> reloadFonts() async {
-    await _init();
+    await init();
     await _sendCommand('reloadFonts', parameters: {'dummy': true});
   }
 
   @override
   Future<void> addFontData({required String face, required Uint8List data}) async {
-    await _init();
+    await init();
     final jsData = data.buffer.toJS;
     await _sendCommand('addFontData', parameters: {'face': face, 'data': jsData}, transfer: [jsData].toJS);
   }
 
   @override
   Future<void> clearAllFontData() async {
-    await _init();
+    await init();
     await _sendCommand('clearAllFontData', parameters: {'dummy': true});
   }
+
+  @override
+  PdfrxBackend get backend => PdfrxBackend.pdfiumWasm;
 }
 
 class _PdfDocumentWasm extends PdfDocument {
   _PdfDocumentWasm._(this.document, {required super.sourceName, this.disposeCallback})
     : permissions = parsePermissions(document) {
-    pages = parsePages(this, document['pages'] as List<dynamic>);
+    _pages = parsePages(this, document['pages'] as List<dynamic>);
     updateMissingFonts(document['missingFonts']);
   }
 
@@ -363,10 +416,11 @@ class _PdfDocumentWasm extends PdfDocument {
   }) async {
     if (isDisposed) return;
     await synchronized(() async {
-      int firstPageIndex = pages.indexWhere((page) => !page.isLoaded);
+      var firstPageIndex = pages.indexWhere((page) => !page.isLoaded);
       if (firstPageIndex < 0) return; // All pages are already loaded
 
-      for (; firstPageIndex < pages.length;) {
+      final newPages = pages.toList(growable: false);
+      for (; firstPageIndex < newPages.length;) {
         if (isDisposed) return;
         final result = await _sendCommand(
           'loadPagesProgressively',
@@ -379,12 +433,9 @@ class _PdfDocumentWasm extends PdfDocument {
         final pagesLoaded = parsePages(this, result['pages'] as List<dynamic>);
         firstPageIndex += pagesLoaded.length;
         for (final page in pagesLoaded) {
-          pages[page.pageNumber - 1] = page; // Update the existing page
+          newPages[page.pageNumber - 1] = page; // Update the existing page
         }
-
-        if (!subject.isClosed) {
-          subject.add(PdfDocumentPageStatusChangedEvent(this, pagesLoaded));
-        }
+        pages = newPages;
 
         updateMissingFonts(result['missingFonts']);
 
@@ -398,8 +449,47 @@ class _PdfDocumentWasm extends PdfDocument {
     });
   }
 
+  /// Don't handle [_pages] directly unless you really understand what you're doing; use [pages] getter/setter instead.
+  ///
+  /// [pages] automatically keeps consistency and also notifies page changes.
+  late List<PdfPage> _pages;
+
   @override
-  late final List<PdfPage> pages;
+  List<PdfPage> get pages => _pages;
+
+  @override
+  set pages(Iterable<PdfPage> newPages) {
+    final pages = <PdfPage>[];
+    final changes = <int, PdfPageStatusChange>{};
+
+    for (final newPage in newPages) {
+      if (pages.length < _pages.length) {
+        final old = _pages[pages.length];
+        if (identical(newPage, old)) {
+          pages.add(newPage);
+          continue;
+        }
+      }
+
+      if (newPage.unwrap<_PdfPageWasm>() == null) {
+        throw ArgumentError('Unsupported PdfPage instances found at [${pages.length}]', 'newPages');
+      }
+
+      final newPageNumber = pages.length + 1;
+      final updated = newPage.withPageNumber(newPageNumber);
+      pages.add(updated);
+
+      final oldPageIndex = _pages.indexWhere((p) => identical(p, newPage));
+      if (oldPageIndex != -1) {
+        changes[newPageNumber] = PdfPageStatusChange.moved(page: updated, oldPageNumber: oldPageIndex + 1);
+      } else {
+        changes[newPageNumber] = PdfPageStatusChange.modified(page: updated);
+      }
+    }
+
+    _pages = List.unmodifiable(pages);
+    subject.add(PdfDocumentPageStatusChangedEvent(this, changes: changes));
+  }
 
   void updateMissingFonts(Map<dynamic, dynamic>? missingFonts) {
     if (missingFonts == null || missingFonts.isEmpty) {
@@ -446,6 +536,69 @@ class _PdfDocumentWasm extends PdfDocument {
           ),
         )
         .toList();
+  }
+
+  @override
+  Future<bool> assemble() async {
+    // Build the indices, imported pages map, and rotations
+    final indices = <int>[];
+    final importedPages = <int, Map<String, dynamic>>{};
+    final rotations = <int?>[];
+    var modifiedCount = 0;
+
+    for (var i = 0; i < pages.length; i++) {
+      final page = pages[i];
+      final wasmPage = page.unwrap<_PdfPageWasm>()!;
+      // if rotation is different, we need to modify the page
+      if (page.rotation.index != wasmPage.rotation.index) {
+        rotations.add(page.rotation.index);
+        modifiedCount++;
+      } else {
+        rotations.add(null);
+      }
+      if (page.document != this) {
+        // the page is from another document; need to import
+        final importId = -(i + 1);
+        indices.add(importId);
+        importedPages[importId] = {
+          'docHandle': wasmPage.document.document['docHandle'],
+          'pageNumber': wasmPage.pageNumber - 1, // 0-based
+        };
+        modifiedCount++;
+      } else {
+        indices.add(wasmPage.pageNumber - 1);
+        if (wasmPage.pageNumber - 1 != i) {
+          modifiedCount++;
+        }
+      }
+    }
+    if (modifiedCount == 0) {
+      // No changes
+      return false;
+    }
+
+    final result = await _sendCommand(
+      'assemble',
+      parameters: {
+        'docHandle': document['docHandle'],
+        'pageIndices': indices,
+        'rotations': rotations,
+        if (importedPages.isNotEmpty) 'importedPages': importedPages,
+      },
+    );
+
+    return result['modified'] as bool;
+  }
+
+  @override
+  Future<Uint8List> encodePdf({bool incremental = false, bool removeSecurity = false}) async {
+    await assemble();
+    final result = await _sendCommand(
+      'encodePdf',
+      parameters: {'docHandle': document['docHandle'], 'incremental': incremental, 'removeSecurity': removeSecurity},
+    );
+    final bb = result['data'] as ByteBuffer;
+    return Uint8List.view(bb.asByteData().buffer, 0, bb.lengthInBytes);
   }
 }
 
@@ -508,15 +661,34 @@ class _PdfPageWasm extends PdfPage {
           (rect[3] as double) - bbBottom,
         );
       }).toList();
+
       final url = link['url'];
-      if (url is String) {
-        return PdfLink(rects, url: Uri.tryParse(url));
-      }
       final dest = link['dest'];
-      if (dest is! Map<Object?, dynamic>) {
-        throw FormatException('Unexpected link destination structure: $dest');
+
+      final annotationData = link['annotation'] as Map<Object?, dynamic>?;
+      final annotation = annotationData != null
+          ? PdfAnnotation(
+              title: annotationData['title'] as String?,
+              content: annotationData['content'] as String?,
+              subject: annotationData['subject'] as String?,
+              modificationDate: PdfDateTime.fromPdfDateString(annotationData['modificationDate']),
+              creationDate: PdfDateTime.fromPdfDateString(annotationData['creationDate']),
+            )
+          : null;
+
+      if (url is String) {
+        return PdfLink(rects, url: Uri.tryParse(url), annotation: annotation);
       }
-      return PdfLink(rects, dest: _pdfDestFromMap(dest));
+
+      if (dest != null && dest is Map<Object?, dynamic>) {
+        return PdfLink(rects, dest: _pdfDestFromMap(dest), annotation: annotation);
+      }
+
+      if (annotation != null) {
+        return PdfLink(rects, annotation: annotation);
+      }
+
+      return PdfLink(rects);
     }).toList();
   }
 
@@ -568,6 +740,7 @@ class _PdfPageWasm extends PdfPage {
     double? fullWidth,
     double? fullHeight,
     int? backgroundColor,
+    PdfPageRotation? rotationOverride,
     PdfAnnotationRenderingMode annotationRenderingMode = PdfAnnotationRenderingMode.annotationAndForms,
     int flags = PdfPageRenderFlags.none,
     PdfPageRenderCancellationToken? cancellationToken,
@@ -591,6 +764,7 @@ class _PdfPageWasm extends PdfPage {
         'fullWidth': fullWidth,
         'fullHeight': fullHeight,
         'backgroundColor': backgroundColor,
+        'rotation': rotationOverride != null ? (rotationOverride.index - rotation.index + 4) & 3 : 0,
         'annotationRenderingMode': annotationRenderingMode.index,
         'flags': flags,
         'formHandle': document.document['formHandle'],
@@ -601,7 +775,7 @@ class _PdfPageWasm extends PdfPage {
 
     if ((flags & PdfPageRenderFlags.premultipliedAlpha) != 0) {
       final count = width * height;
-      for (int i = 0; i < count; i++) {
+      for (var i = 0; i < count; i++) {
         final b = pixels[i * 4];
         final g = pixels[i * 4 + 1];
         final r = pixels[i * 4 + 2];

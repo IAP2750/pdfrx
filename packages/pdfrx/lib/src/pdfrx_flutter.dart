@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show WidgetsFlutterBinding;
 import 'package:flutter/services.dart';
 
 import '../pdfrx.dart';
@@ -14,13 +15,16 @@ bool _isInitialized = false;
 /// This function actually sets up the following functions:
 /// - [Pdfrx.loadAsset]: Loads an asset by name and returns its byte data.
 /// - [Pdfrx.getCacheDirectory]: Returns the path to the temporary directory for caching.
+/// - Call [PdfrxEntryFunctions.init] to initialize the library.
 ///
 /// For Dart (non-Flutter) programs, you should call [pdfrxInitialize] instead.
 ///
 /// The function shows PDFium WASM module warnings in debug mode by default.
 /// You can disable these warnings by setting [dismissPdfiumWasmWarnings] to true.
-void pdfrxFlutterInitialize({bool dismissPdfiumWasmWarnings = false}) {
+Future<void> pdfrxFlutterInitialize({bool dismissPdfiumWasmWarnings = false}) async {
   if (_isInitialized) return;
+
+  WidgetsFlutterBinding.ensureInitialized();
 
   if (pdfrxEntryFunctionsOverride != null) {
     PdfrxEntryFunctions.instance = pdfrxEntryFunctionsOverride!;
@@ -31,8 +35,6 @@ void pdfrxFlutterInitialize({bool dismissPdfiumWasmWarnings = false}) {
     return asset.buffer.asUint8List();
   };
   Pdfrx.getCacheDirectory ??= getCacheDirectory;
-
-  platformInitialize();
 
   // Checking pdfium.wasm availability for Web and debug builds.
   if (kDebugMode && !dismissPdfiumWasmWarnings) {
@@ -59,6 +61,9 @@ void pdfrxFlutterInitialize({bool dismissPdfiumWasmWarnings = false}) {
     }();
   }
 
+  /// NOTE: it's actually async, but hopefully, it finishes quickly...
+  await platformInitialize();
+
   _isInitialized = true;
 }
 
@@ -70,11 +75,49 @@ extension PdfPageExt on PdfPage {
 extension PdfImageExt on PdfImage {
   /// Create [Image] from the rendered image.
   ///
+  /// [pixelSizeThreshold] specifies the maximum allowed pixel size (width or height).
+  /// If the image exceeds this size, it will be downscaled to fit within the threshold
+  /// while maintaining the aspect ratio.
+  ///
   /// The returned [Image] must be disposed of when no longer needed.
-  Future<Image> createImage() {
+  Future<Image> createImage({int? pixelSizeThreshold}) {
+    int? targetWidth;
+    int? targetHeight;
+    if (pixelSizeThreshold != null && (width > pixelSizeThreshold || height > pixelSizeThreshold)) {
+      final aspectRatio = width / height;
+      if (width >= height) {
+        targetWidth = pixelSizeThreshold;
+        targetHeight = (pixelSizeThreshold / aspectRatio).round();
+      } else {
+        targetHeight = pixelSizeThreshold;
+        targetWidth = (pixelSizeThreshold * aspectRatio).round();
+      }
+    }
+
     final comp = Completer<Image>();
-    decodeImageFromPixels(pixels, width, height, PixelFormat.bgra8888, (image) => comp.complete(image));
+    decodeImageFromPixels(
+      pixels,
+      width,
+      height,
+      PixelFormat.bgra8888,
+      (image) => comp.complete(image),
+      targetWidth: targetWidth,
+      targetHeight: targetHeight,
+    );
     return comp.future;
+  }
+}
+
+extension ImageExt on Image {
+  /// Convert [Image] to [PdfImage].
+  Future<PdfImage> toPdfImage() async {
+    final rgba = (await toByteData(format: ImageByteFormat.rawRgba))!.buffer.asUint8List();
+    for (var i = 0; i < rgba.length; i += 4) {
+      final r = rgba[i];
+      rgba[i] = rgba[i + 2];
+      rgba[i + 2] = r;
+    }
+    return PdfImage.createFromBgraData(rgba, width: width, height: height);
   }
 }
 

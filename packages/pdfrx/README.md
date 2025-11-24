@@ -2,12 +2,12 @@
 
 [![Build Test](https://github.com/espresso3389/pdfrx/actions/workflows/build-test.yml/badge.svg)](https://github.com/espresso3389/pdfrx/actions/workflows/build-test.yml)
 
-[pdfrx](https://pub.dartlang.org/packages/pdfrx) is a rich and fast PDF viewer plugin for Flutter. It provides ready-to-use widgets for displaying PDF documents in your Flutter applications.
+[pdfrx](https://pub.dartlang.org/packages/pdfrx) is a rich and fast PDF viewer and manipulation plugin for Flutter. It provides ready-to-use widgets for displaying and editing PDF documents, including page manipulation, document combining, and image import in your Flutter applications.
 
-This plugin is built on top of [pdfrx_engine](https://pub.dartlang.org/packages/pdfrx_engine), which handles the low-level PDF rendering using [PDFium](https://pdfium.googlesource.com/pdfium/). The separation allows for a clean architecture where:
+This plugin is built on top of [pdfrx_engine](https://pub.dartlang.org/packages/pdfrx_engine), which handles the low-level PDF rendering and manipulation using [PDFium](https://pdfium.googlesource.com/pdfium/). The separation allows for a clean architecture where:
 
-- **pdfrx** (this package) - Provides Flutter widgets, UI components, and platform integration
-- **pdfrx_engine** - Handles PDF parsing and rendering without Flutter dependencies
+- **pdfrx** (this package) - Provides Flutter widgets, UI components, platform integration, and PDF editing features (page manipulation, combining, image import)
+- **pdfrx_engine** - Handles PDF parsing, rendering, and manipulation without Flutter dependencies
 
 The plugin supports Android, iOS, Windows, macOS, Linux, and Web.
 
@@ -60,7 +60,7 @@ Add this to your package's `pubspec.yaml` file and execute `flutter pub get`:
 
 ```yaml
 dependencies:
-  pdfrx: ^2.1.14
+  pdfrx: ^2.2.16
 ```
 
 **Note:** You only need to add `pdfrx` to your dependencies. The `pdfrx_engine` package is automatically included as a dependency of `pdfrx`.
@@ -117,6 +117,20 @@ To restore the WASM binaries, run the following command:
 dart run pdfrx:remove_wasm_modules --revert
 ```
 
+## Note for iOS/macOS: Using CoreGraphics Instead of PDFium
+
+For iOS and macOS apps, you can optionally use [pdfrx_coregraphics](https://pub.dev/packages/pdfrx_coregraphics) to render PDFs with Apple's native CoreGraphics/PDFKit instead of the bundled PDFium library. This can significantly reduce your app size by removing PDFium dependencies on Darwin platforms.
+
+**⚠️ Note: `pdfrx_coregraphics` is experimental and has some limitations. See the [package documentation](https://pub.dev/packages/pdfrx_coregraphics#limitations) for details.**
+
+To use CoreGraphics rendering:
+
+1. Add `pdfrx_coregraphics` to your dependencies
+2. Set the CoreGraphics entry functions before initializing pdfrx
+3. Optionally remove PDFium dependencies to reduce app size
+
+For complete installation instructions and app size reduction steps, see the [pdfrx_coregraphics README](https://pub.dev/packages/pdfrx_coregraphics).
+
 ## PdfViewer constructors
 
 For opening PDF files from various sources, there are several constructors available in [PdfViewer](https://pub.dev/documentation/pdfrx/latest/pdfrx/PdfViewer-class.html):
@@ -124,11 +138,23 @@ For opening PDF files from various sources, there are several constructors avail
 - [PdfViewer.asset](https://pub.dev/documentation/pdfrx/latest/pdfrx/PdfViewer/PdfViewer.asset.html) - Load from Flutter assets
 - [PdfViewer.file](https://pub.dev/documentation/pdfrx/latest/pdfrx/PdfViewer/PdfViewer.file.html) - Load from local file
 - [PdfViewer.data](https://pub.dev/documentation/pdfrx/latest/pdfrx/PdfViewer/PdfViewer.data.html) - Load from memory (Uint8List)
-- [PdfViewer.network](https://pub.dev/documentation/pdfrx/latest/pdfrx/PdfViewer/PdfViewer.uri.html) - Load from network URL
+- [PdfViewer.uri](https://pub.dev/documentation/pdfrx/latest/pdfrx/PdfViewer/PdfViewer.uri.html) - Load from network URL
 
 ## Customizations/Features
 
 You can customize the behaviors and the viewer look and feel by configuring [PdfViewerParams](https://pub.dev/documentation/pdfrx/latest/pdfrx/PdfViewerParams-class.html).
+
+```dart
+PdfViewer.asset(
+  'assets/test.pdf',
+  params: const PdfViewerParams(
+    scrollPhysics: FixedOverscrollPhysics(maxOverscroll: 120),
+    scrollPhysicsScale: BouncingScrollPhysics(),
+  ),
+);
+```
+
+The `scrollPhysics` and `scrollPhysicsScale` hooks let you plug in your own [ScrollPhysics](https://api.flutter.dev/flutter/widgets/ScrollPhysics-class.html) (or the bundled [FixedOverscrollPhysics](https://pub.dev/documentation/pdfrx/latest/pdfrx/FixedOverscrollPhysics-class.html)) to tune drag and zoom behavior per platform.
 
 ## Deal with Password Protected PDF Files
 
@@ -183,6 +209,7 @@ For more text selection customization, see [Text Selection](https://github.com/e
 - [Dark/Night Mode Support](https://github.com/espresso3389/pdfrx/blob/master/doc/Dark-Night-Mode-Support.md)
 - [Document Loading Indicator](https://github.com/espresso3389/pdfrx/blob/master/doc/Document-Loading-Indicator.md)
 - [Viewer Customization using Widget Overlay](https://pub.dev/documentation/pdfrx/latest/pdfrx/PdfViewerParams/viewerOverlayBuilder.html)
+- [Custom Scroll Physics for Drag/Zoom](https://pub.dev/documentation/pdfrx/latest/pdfrx/PdfViewerParams/scrollPhysics.html)
 
 ### Additional Customizations
 

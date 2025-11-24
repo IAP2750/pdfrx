@@ -38,11 +38,32 @@ import '../../pdfrx.dart';
 /// ),
 /// ```
 class PdfDocumentViewBuilder extends StatefulWidget {
-  const PdfDocumentViewBuilder({required this.documentRef, required this.builder, super.key});
+  /// Creates a widget that loads PDF document.
+  const PdfDocumentViewBuilder({
+    required this.documentRef,
+    required this.builder,
+    this.loadingBuilder,
+    this.errorBuilder,
+    super.key,
+  });
 
+  /// Creates a widget that loads PDF document from an asset.
+  ///
+  /// - [assetName] is the name of the asset.
+  /// - [builder] is the builder that builds the widget tree with the PDF document.
+  /// - [loadingBuilder] is the builder that builds the loading widget.
+  /// - [errorBuilder] is the builder that builds the error widget on error.
+  /// - [passwordProvider] is the provider for the password of the PDF document.
+  /// - [firstAttemptByEmptyPassword] indicates whether to try to open the document with an empty password first.
+  /// - [useProgressiveLoading] indicates whether to use progressive loading.
+  /// - [autoDispose] indicates whether to automatically dispose the document when the widget is disposed.
+  ///
+  /// Returns the created widget.
   PdfDocumentViewBuilder.asset(
     String assetName, {
     required this.builder,
+    this.loadingBuilder,
+    this.errorBuilder,
     super.key,
     PdfPasswordProvider? passwordProvider,
     bool firstAttemptByEmptyPassword = true,
@@ -56,14 +77,27 @@ class PdfDocumentViewBuilder extends StatefulWidget {
          autoDispose: autoDispose,
        );
 
+  /// Creates a widget that loads PDF document from a file.
+  ///
+  /// - [filePath] is the path of the file.
+  /// - [builder] is the builder that builds the widget tree with the PDF document.
+  /// - [loadingBuilder] is the builder that builds the loading widget.
+  /// - [errorBuilder] is the builder that builds the error widget on error.
+  /// - [passwordProvider] is the provider for the password of the PDF document.
+  /// - [firstAttemptByEmptyPassword] indicates whether to try to open the document with an empty password first.
+  /// - [useProgressiveLoading] indicates whether to use progressive loading.
+  /// - [autoDispose] indicates whether to automatically dispose the document when the widget is disposed.
+  ///
+  /// Returns the created widget.
   PdfDocumentViewBuilder.file(
     String filePath, {
     required this.builder,
+    this.loadingBuilder,
+    this.errorBuilder,
     super.key,
     PdfPasswordProvider? passwordProvider,
     bool firstAttemptByEmptyPassword = true,
     bool useProgressiveLoading = false,
-
     bool autoDispose = true,
   }) : documentRef = PdfDocumentRefFile(
          filePath,
@@ -73,9 +107,23 @@ class PdfDocumentViewBuilder extends StatefulWidget {
          autoDispose: autoDispose,
        );
 
+  /// Creates a widget that loads PDF document from a URI.
+  ///
+  /// - [uri] is the URI of the PDF document.
+  /// - [builder] is the builder that builds the widget tree with the PDF document.
+  /// - [loadingBuilder] is the builder that builds the loading widget.
+  /// - [errorBuilder] is the builder that builds the error widget on error.
+  /// - [passwordProvider] is the provider for the password of the PDF document.
+  /// - [firstAttemptByEmptyPassword] indicates whether to try to open the document with an empty password first.
+  /// - [useProgressiveLoading] indicates whether to use progressive loading.
+  /// - [autoDispose] indicates whether to automatically dispose the document when the widget is disposed.
+  ///
+  /// Returns the created widget.
   PdfDocumentViewBuilder.uri(
     Uri uri, {
     required this.builder,
+    this.loadingBuilder,
+    this.errorBuilder,
     super.key,
     PdfPasswordProvider? passwordProvider,
     bool firstAttemptByEmptyPassword = true,
@@ -95,19 +143,29 @@ class PdfDocumentViewBuilder extends StatefulWidget {
          withCredentials: withCredentials,
        );
 
-  /// A reference to the PDF document.
+  /// The reference to the PDF document.
   final PdfDocumentRef documentRef;
 
-  /// A builder that builds a widget tree with the PDF document.
+  /// The builder that builds the widget tree with the PDF document.
   final PdfDocumentViewBuilderFunction builder;
+
+  /// The builder that builds the loading widget.
+  final WidgetBuilder? loadingBuilder;
+
+  /// The builder that builds the error widget on error.
+  final PdfDocumentViewBuilderErrorBuilder? errorBuilder;
 
   @override
   State<PdfDocumentViewBuilder> createState() => _PdfDocumentViewBuilderState();
-
-  static PdfDocumentViewBuilder? maybeOf(BuildContext context) {
-    return context.findAncestorWidgetOfExactType<PdfDocumentViewBuilder>();
-  }
 }
+
+/// A function that builds a widget tree when an error occurs while loading the PDF document.
+///
+/// [context] is the build context.
+/// [error] is the error that occurred.
+/// [stackTrace] is the stack trace of the error, which may be null.
+typedef PdfDocumentViewBuilderErrorBuilder =
+    Widget Function(BuildContext context, Object error, StackTrace? stackTrace);
 
 class _PdfDocumentViewBuilderState extends State<PdfDocumentViewBuilder> {
   StreamSubscription<PdfDocumentEvent>? _updateSubscription;
@@ -119,6 +177,7 @@ class _PdfDocumentViewBuilderState extends State<PdfDocumentViewBuilder> {
     widget.documentRef.resolveListenable()
       ..addListener(_onDocumentChanged)
       ..load();
+    _onDocumentChanged();
   }
 
   @override
@@ -150,13 +209,26 @@ class _PdfDocumentViewBuilderState extends State<PdfDocumentViewBuilder> {
         }
       });
       document?.loadPagesProgressively();
-      setState(() {});
+      if (mounted) setState(() {});
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return widget.builder(context, widget.documentRef.resolveListenable().document);
+    final listenable = widget.documentRef.resolveListenable();
+
+    // Handle error
+    if (listenable.error != null && widget.errorBuilder != null) {
+      return widget.errorBuilder!(context, listenable.error!, listenable.stackTrace);
+    }
+
+    // Handle loading
+    if (listenable.document == null && widget.loadingBuilder != null) {
+      return widget.loadingBuilder!(context);
+    }
+
+    // Render document
+    return widget.builder(context, listenable.document);
   }
 }
 
@@ -167,9 +239,10 @@ typedef PdfDocumentViewBuilderFunction = Widget Function(BuildContext context, P
 ///
 /// [biggestSize] is the size of the widget.
 /// [page] is the page to be displayed.
+/// [rotationOverride] is the rotation to override the page rotation.
 ///
 /// The function returns the size of the page.
-typedef PdfPageViewSizeCallback = Size Function(Size biggestSize, PdfPage page);
+typedef PdfPageViewSizeCallback = Size Function(Size biggestSize, PdfPage page, PdfPageRotation? rotationOverride);
 
 /// Function to build a widget that wraps the page image.
 ///
@@ -190,6 +263,7 @@ class PdfPageView extends StatefulWidget {
   const PdfPageView({
     required this.document,
     required this.pageNumber,
+    this.rotationOverride,
     this.maximumDpi = 300,
     this.alignment = Alignment.center,
     this.decoration,
@@ -204,6 +278,9 @@ class PdfPageView extends StatefulWidget {
 
   /// The page number to be displayed. (The first page is 1).
   final int pageNumber;
+
+  /// The rotation to override the page rotation.
+  final PdfPageRotation? rotationOverride;
 
   /// The maximum DPI of the page image. The default value is 300.
   ///
@@ -238,18 +315,52 @@ class _PdfPageViewState extends State<PdfPageView> {
   ui.Image? _image;
   Size? _pageSize;
   PdfPageRenderCancellationToken? _cancellationToken;
+  StreamSubscription<PdfDocumentEvent>? _eventSubscription;
 
   @override
   void initState() {
     super.initState();
-    pdfrxFlutterInitialize();
+    _subscribeToDocumentEvents();
   }
 
   @override
   void dispose() {
-    _image?.dispose();
-    _cancellationToken?.cancel();
+    _eventSubscription?.cancel();
+    _clearCache(refresh: false);
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant PdfPageView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.document != oldWidget.document ||
+        widget.pageNumber != oldWidget.pageNumber ||
+        widget.rotationOverride != oldWidget.rotationOverride) {
+      _clearCache();
+      _subscribeToDocumentEvents();
+    }
+  }
+
+  void _clearCache({bool refresh = true}) {
+    _image?.dispose();
+    _image = null;
+    _pageSize = null;
+    _cancellationToken?.cancel();
+    _cancellationToken = null;
+    if (refresh && mounted) {
+      setState(() {});
+    }
+  }
+
+  void _subscribeToDocumentEvents() {
+    _eventSubscription?.cancel();
+    _eventSubscription = widget.document?.events.listen((event) {
+      if (event is PdfDocumentPageStatusChangedEvent) {
+        if (event.changes.keys.contains(widget.pageNumber)) {
+          _clearCache();
+        }
+      }
+    });
   }
 
   Widget _defaultDecorationBuilder(BuildContext context, Size pageSize, PdfPage page, RawImage? pageImage) {
@@ -312,10 +423,14 @@ class _PdfPageViewState extends State<PdfPageView> {
 
     final Size pageSize;
     if (widget.pageSizeCallback != null) {
-      pageSize = widget.pageSizeCallback!(size, page);
+      pageSize = widget.pageSizeCallback!(size, page, widget.rotationOverride);
     } else {
-      final scale = min(widget.maximumDpi / 72, min(size.width / page.width, size.height / page.height));
-      pageSize = Size(page.width * scale, page.height * scale);
+      final swapWH = ((widget.rotationOverride ?? page.rotation).index - page.rotation.index) & 1 == 1;
+      final w = swapWH ? page.height : page.width;
+      final h = swapWH ? page.width : page.height;
+
+      final scale = min(widget.maximumDpi / 72, min(size.width / w, size.height / h));
+      pageSize = Size(w * scale, h * scale);
     }
 
     if (pageSize == _pageSize) return;
@@ -326,6 +441,7 @@ class _PdfPageViewState extends State<PdfPageView> {
     final pageImage = await page.render(
       fullWidth: pageSize.width,
       fullHeight: pageSize.height,
+      rotationOverride: widget.rotationOverride,
       cancellationToken: _cancellationToken,
     );
     if (pageImage == null) return;

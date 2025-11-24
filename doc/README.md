@@ -5,6 +5,7 @@ Welcome to the pdfrx documentation! This guide provides comprehensive informatio
 ## Getting Started
 
 - [pdfrx Initialization](pdfrx-Initialization.md) - How to properly initialize pdfrx in your app
+- [Progressive Loading](Progressive-Loading.md) - Understanding and using progressive page loading for large PDFs
 
 ## Core Features
 
@@ -29,9 +30,18 @@ Welcome to the pdfrx documentation! This guide provides comprehensive informatio
 
 ### Advanced Topics
 
+- [Coordinate Conversion](Coordinate-Conversion.md) - Understanding and converting between coordinate systems
 - [Customizing Key Handling](Customizing-Key-Handling-on-PdfViewer.md) - Keyboard shortcuts
 - [Password Protected PDFs](Deal-with-Password-Protected-PDF-Files-using-PasswordProvider.md) - Handle encrypted PDFs
 - [Overlay Builders](Deal-with-viewerOverlayBuilder-and-pageOverlaysBuilder.md) - Custom overlays
+- [Loading Fonts Dynamically](Loading-Fonts-Dynamically.md) - Add custom fonts
+- [Low-Level PDFium Bindings Access](Low-Level-PDFium-Bindings-Access.md) - Using PDFium function directly
+- [Interoperability with other PDFium Libraries](Interoperability-with-other-PDFium-Libraries.md) - Using pdfrx alongside other PDFium-based libraries
+
+### PDF Editing
+
+- [PDF Page Manipulation](PDF-Page-Manipulation.md) - Re-arrange, combine, and extract PDF pages
+- [Importing Images to PDF](Importing-Images-to-PDF.md) - Convert images to PDF and insert images into PDFs
 
 ## Platform-Specific
 

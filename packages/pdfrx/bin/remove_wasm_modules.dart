@@ -8,8 +8,8 @@ import 'package:path/path.dart' as path;
 Future<int> main(List<String> args) async {
   try {
     // Parse arguments
-    bool revert = false;
-    String projectRoot = '.';
+    var revert = false;
+    var projectRoot = '.';
 
     for (final arg in args) {
       if (arg == '--revert' || arg == '-r') {
@@ -29,7 +29,7 @@ Future<int> main(List<String> args) async {
     }
 
     final deps = await oss.listDependencies(pubspecYamlPath: projectPubspecYaml.path);
-    final pdfrxWasmPackage = deps.allDependencies.firstWhere((p) => p.name == 'pdfrx');
+    final pdfrxWasmPackage = [...deps.allDependencies, deps.package].firstWhere((p) => p.name == 'pdfrx');
     print('Found: ${pdfrxWasmPackage.name} ${pdfrxWasmPackage.version}: ${pdfrxWasmPackage.pubspecYamlPath}');
 
     final pubspecPath = pdfrxWasmPackage.pubspecYamlPath;

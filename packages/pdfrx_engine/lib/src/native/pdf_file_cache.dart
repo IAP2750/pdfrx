@@ -9,10 +9,14 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as path;
 import 'package:synchronized/extension.dart';
 
-import '../pdfrx_api.dart';
+import '../pdf_document.dart';
+import '../pdf_exception.dart';
+import '../pdfrx.dart';
+import '../pdfrx_entry_functions.dart';
 import '../pdfrx_initialize_dart.dart';
 import 'http_cache_control.dart';
 import 'native_utils.dart';
+import 'package:pdfium_dart/pdfium_dart.dart' as pdfium_bindings;
 
 final _rafFinalizer = Finalizer<RandomAccessFile>((raf) {
   // Attempt to close the file if it hasn't been closed explicitly.
@@ -65,7 +69,7 @@ class PdfFileCache {
   int get cachedBytes {
     if (!isInitialized) return 0;
     var countCached = 0;
-    for (int i = 0; i < totalBlocks; i++) {
+    for (var i = 0; i < totalBlocks; i++) {
       if (isCached(i)) {
         countCached++;
       }
@@ -82,6 +86,13 @@ class PdfFileCache {
       _raf = null;
       await raf.close();
     }
+  }
+
+  Future<void> deleteCacheFile() async {
+    await close();
+    try {
+      await file.delete();
+    } catch (_) {}
   }
 
   Future<void> _ensureFileOpen() async {
@@ -118,7 +129,7 @@ class PdfFileCache {
 
   Future<void> setCached(int startBlock, {int? lastBlock}) async {
     lastBlock ??= startBlock;
-    for (int i = startBlock; i <= lastBlock; i++) {
+    for (var i = startBlock; i <= lastBlock; i++) {
       _cacheState[i >> 3] |= 1 << (i & 7);
     }
     await _saveCacheState();
@@ -287,7 +298,10 @@ Future<PdfDocument> pdfDocumentFromUri(
   PdfDownloadProgressCallback? progressCallback,
   bool useRangeAccess = true,
   Map<String, String>? headers,
+  Duration? timeout,
+  PdfrxEntryFunctions? entryFunctions,
 }) async {
+  entryFunctions ??= PdfrxEntryFunctions.instance;
   progressCallback?.call(0);
   cache ??= await PdfFileCache.fromUri(uri);
   final httpClientWrapper = _HttpClientWrapper(Pdfrx.createHttpClient ?? () => http.Client());
@@ -303,12 +317,14 @@ Future<PdfDocument> pdfDocumentFromUri(
         0,
         useRangeAccess: useRangeAccess,
         headers: headers,
+        timeout: timeout,
       );
       if (result.isFullDownload) {
-        return await PdfDocument.openFile(
+        return await entryFunctions.openFile(
           cache.filePath,
           passwordProvider: passwordProvider,
           firstAttemptByEmptyPassword: firstAttemptByEmptyPassword,
+          useProgressiveLoading: useProgressiveLoading,
         );
       }
     } else {
@@ -325,13 +341,14 @@ Future<PdfDocument> pdfDocumentFromUri(
           addCacheControlHeaders: true,
           useRangeAccess: useRangeAccess,
           headers: headers,
+          timeout: timeout,
         );
         // cached file has expired
         // if the file has fully downloaded again or has not been modified
         if (result.isFullDownload || result.notModified) {
           cache.close(); // close the cache file before opening it.
           httpClientWrapper.reset();
-          return await PdfDocument.openFile(
+          return await entryFunctions.openFile(
             cache.filePath,
             passwordProvider: passwordProvider,
             firstAttemptByEmptyPassword: firstAttemptByEmptyPassword,
@@ -341,16 +358,24 @@ Future<PdfDocument> pdfDocumentFromUri(
       }
     }
 
-    return await PdfDocument.openCustom(
+    return await entryFunctions.openCustom(
       read: (buffer, position, size) async {
         final totalSize = size;
         final end = position + size;
-        int bufferPosition = 0;
-        for (int p = position; p < end;) {
+        var bufferPosition = 0;
+        for (var p = position; p < end;) {
           final blockId = p ~/ cache!.blockSize;
           final isAvailable = cache.isCached(blockId);
           if (!isAvailable) {
-            await _downloadBlock(httpClientWrapper, uri, cache, progressCallback, blockId, headers: headers);
+            await _downloadBlock(
+              httpClientWrapper,
+              uri,
+              cache,
+              progressCallback,
+              blockId,
+              headers: headers,
+              timeout: timeout,
+            );
           }
           final readEnd = min(p + size, (blockId + 1) * cache.blockSize);
           final sizeToRead = readEnd - p;
@@ -372,6 +397,11 @@ Future<PdfDocument> pdfDocumentFromUri(
       },
     );
   } catch (e) {
+    if (e is PdfException && e.errorCode == pdfium_bindings.FPDF_ERR_FORMAT) {
+      // the file seems broken; delete the cache file.
+      // NOTE: the trick does not work on Windows :(
+      await cache.deleteCacheFile();
+    }
     cache.close();
     httpClientWrapper.reset();
     rethrow;
@@ -406,6 +436,7 @@ Future<_DownloadResult> _downloadBlock(
   bool addCacheControlHeaders = false,
   bool useRangeAccess = true,
   Map<String, String>? headers,
+  Duration? timeout,
 }) => httpClientWrapper.synchronized(() async {
   int? fileSize;
   final blockOffset = blockId * cache.blockSize;
@@ -418,7 +449,7 @@ Future<_DownloadResult> _downloadBlock(
     });
   late final http.StreamedResponse response;
   try {
-    response = await httpClientWrapper.client.send(request).timeout(Duration(seconds: 5));
+    response = await httpClientWrapper.client.send(request).timeout(timeout ?? const Duration(seconds: 5));
   } on TimeoutException {
     httpClientWrapper.reset();
     rethrow;
@@ -439,8 +470,8 @@ Future<_DownloadResult> _downloadBlock(
   }
 
   final contentRange = response.headers['content-range'];
-  bool isFullDownload = false;
-  if (response.statusCode == 206 && contentRange != null) {
+  var isFullDownload = false;
+  if (contentRange != null) {
     final m = RegExp(r'bytes (\d+)-(\d+)/(\d+)').firstMatch(contentRange);
     fileSize = int.parse(m!.group(3)!);
   } else {
@@ -463,7 +494,13 @@ Future<_DownloadResult> _downloadBlock(
   }
 
   if (isFullDownload) {
-    fileSize ??= cachedBytesSoFar;
+    if (fileSize != null) {
+      if (fileSize != cache.fileSize) {
+        throw PdfException('File size mismatch after full download: expected $fileSize, got ${cache.fileSize}');
+      }
+    } else {
+      fileSize = cachedBytesSoFar;
+    }
     await cache.initializeWithFileSize(fileSize, truncateExistingContent: false);
     await cache.setCached(0, lastBlock: cache.totalBlocks - 1);
   } else {

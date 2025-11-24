@@ -44,3 +44,7 @@ build/
 # Build outputs and intermediate files
 **.xcframework/
 *.zip
+
+doc/api/
+
+.pdfium_hash
