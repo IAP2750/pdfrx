@@ -1385,7 +1385,7 @@ class _PdfPagePdfium extends PdfPage {
                   pdfium.FPDF_LoadPage(document, params.pageNumber - 1);
               try {
                 final count = pdfium.FPDFPage_GetAnnotCount(page);
-                final rectf = arena.allocate<pdfium_bindings.FS_RECTF>(sizeOf<pdfium_bindings.FS_RECTF>());
+                final rectf = arena<pdfium_bindings.FS_RECTF>();
                 final links = <PdfLink>[];
                 for (int i = 0; i < count; i++) {
                   final annot = pdfium.FPDFPage_GetAnnot(page, i);
