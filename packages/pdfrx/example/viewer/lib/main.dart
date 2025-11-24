@@ -1,4 +1,4 @@
-import 'dart:math';
+import 'dart:math' as math;
 
 import 'package:file_selector/file_selector.dart' as fs;
 import 'package:flutter/foundation.dart';
@@ -41,7 +41,7 @@ class MainPage extends StatefulWidget {
   State<MainPage> createState() => _MainPageState();
 }
 
-class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
+class _MainPageState extends State<MainPage> with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   final documentRef = ValueNotifier<PdfDocumentRef?>(null);
   final controller = PdfViewerController();
   final showLeftPane = ValueNotifier<bool>(false);
@@ -49,6 +49,13 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
   final textSearcher = ValueNotifier<PdfTextSearcher?>(null);
   final _markers = <int, List<Marker>>{};
   List<PdfPageTextRange>? textSelections;
+
+  bool _isDraggingHandle = false;
+  // Magnifier animation controller
+  late final AnimationController _magnifierAnimController = AnimationController(
+    duration: const Duration(milliseconds: 250),
+    vsync: this,
+  );
 
   void _update() {
     if (mounted) {
@@ -65,6 +72,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
 
   @override
   void dispose() {
+    _magnifierAnimController.dispose();
     WidgetsBinding.instance.removeObserver(this);
     textSearcher.value?.dispose();
     textSearcher.dispose();
@@ -103,7 +111,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
             return Row(
               children: [
                 if (!isMobileDevice) ...[
-                  Expanded(child: Text(_fileName(documentRef?.sourceName) ?? 'No document loaded')),
+                  Expanded(child: Text(_fileName(documentRef?.key.sourceName) ?? 'No document loaded')),
                   SizedBox(width: 10),
                   FilledButton(onPressed: () => openFile(), child: Text('Open File')),
                   SizedBox(width: 20),
@@ -198,7 +206,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
                                     valueListenable: documentRef,
                                     builder: (context, documentRef, child) => Expanded(
                                       child: Text(
-                                        _fileName(documentRef?.sourceName) ?? 'No document loaded',
+                                        _fileName(documentRef?.key.sourceName) ?? 'No document loaded',
                                         softWrap: false,
                                       ),
                                     ),
@@ -303,28 +311,166 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
                         pageAnchor: isHorizontalLayout ? PdfPageAnchor.left : PdfPageAnchor.top,
                         pageAnchorEnd: isHorizontalLayout ? PdfPageAnchor.right : PdfPageAnchor.bottom,
                         textSelectionParams: PdfTextSelectionParams(
-                          enabled: true,
                           onTextSelectionChange: (textSelection) async {
                             textSelections = await textSelection.getSelectedTextRanges();
+                          },
+                          // magnifier: PdfViewerSelectionMagnifierParams(
+                          //   shouldShowMagnifierForAnchor: (textAnchor, controller, params) => true,
+                          //   getMagnifierRectForAnchor: (textAnchor, params, clampedPointerPosition) {
+                          //     final c = textAnchor.page.charRects[textAnchor.index];
+                          //     final baseUnit = switch (textAnchor.direction) {
+                          //       PdfTextDirection.ltr || PdfTextDirection.rtl || PdfTextDirection.unknown => c.height,
+                          //       PdfTextDirection.vrtl => c.width,
+                          //     };
+
+                          //     // Convert clamped pointer position from viewport to document coordinates
+                          //     final pointerInDocument = controller.localToDocument(clampedPointerPosition);
+                          //     return Rect.fromLTRB(
+                          //       pointerInDocument.dx - baseUnit * 2.5,
+                          //       textAnchor.rect.top - baseUnit * 0.5,
+                          //       pointerInDocument.dx + baseUnit * 2.5,
+                          //       textAnchor.rect.bottom + baseUnit * 0.5,
+                          //     );
+                          //   },
+                          //   builder:
+                          //       (
+                          //         context,
+                          //         textAnchor,
+                          //         params,
+                          //         magnifierContent,
+                          //         magnifierContentSize,
+                          //         pointerPosition,
+                          //         magnifierPosition,
+                          //       ) {
+                          //         // calculate the scale to fit the magnifier content fit into 80x80 box
+                          //         final contentScale =
+                          //             80 / math.min(magnifierContentSize.width, magnifierContentSize.height);
+
+                          //         // Calculate the actual magnifier widget size (with border radius padding)
+                          //         final magnifierWidgetSize = Size(
+                          //           magnifierContentSize.width * contentScale,
+                          //           magnifierContentSize.height * contentScale,
+                          //         );
+
+                          //         // Start animation when magnifier first appears and capture initial pointer position
+                          //         if (_magnifierAnimController.status == AnimationStatus.dismissed) {
+                          //           _magnifierAnimController.forward();
+                          //         }
+
+                          //         final centeredStartOffset =
+                          //             pointerPosition -
+                          //             Offset(magnifierWidgetSize.width / 2, magnifierWidgetSize.height / 2);
+                          //         final delta = centeredStartOffset - magnifierPosition;
+
+                          //         return AnimatedBuilder(
+                          //           animation: _magnifierAnimController,
+                          //           builder: (context, child) {
+                          //             final currentProgress = _magnifierAnimController.value;
+                          //             return Transform.translate(
+                          //               offset: delta * (1 - currentProgress),
+                          //               child: Transform.scale(
+                          //                 scale: currentProgress,
+                          //                 alignment: Alignment.center,
+                          //                 child: child!,
+                          //               ),
+                          //             );
+                          //           },
+                          //           child: Container(
+                          //             decoration: BoxDecoration(
+                          //               borderRadius: BorderRadius.circular(25),
+                          //               boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 8, spreadRadius: 2)],
+                          //             ),
+                          //             child: ClipRRect(
+                          //               borderRadius: BorderRadius.circular(25),
+                          //               child: SizedBox(
+                          //                 width: magnifierContentSize.width * contentScale,
+                          //                 height: magnifierContentSize.height * contentScale,
+                          //                 child: magnifierContent,
+                          //               ),
+                          //             ),
+                          //           ),
+                          //         );
+                          //       },
+                          //   calcPosition:
+                          //       (
+                          //         widgetSize,
+                          //         anchorLocalRect,
+                          //         handleLocalRect,
+                          //         textAnchor,
+                          //         pointerPosition, {
+                          //         margin = 10.0,
+                          //         marginOnTop,
+                          //         marginOnBottom,
+                          //       }) {
+                          //         if (widgetSize == null) return null;
+
+                          //         final viewSize = controller.viewSize;
+
+                          //         // Center magnifier horizontally on pointer for smooth tracking
+                          //         var left = pointerPosition.dx - widgetSize.width / 2;
+
+                          //         // Clamp to viewport bounds
+                          //         if (left < margin) {
+                          //           left = margin;
+                          //         } else if (left + widgetSize.width + margin > viewSize.width) {
+                          //           left = viewSize.width - widgetSize.width - margin;
+                          //         }
+
+                          //         var top = anchorLocalRect.top - widgetSize.height - (marginOnTop ?? margin);
+
+                          //         // If too close to top, place below instead
+                          //         if (top < margin) {
+                          //           top = anchorLocalRect.bottom + (marginOnBottom ?? margin);
+                          //         }
+
+                          //         return Offset(left, top);
+                          //       },
+                          //   shouldShowMagnifier: () =>
+                          //       _isDraggingHandle ||
+                          //       _magnifierAnimController.status == AnimationStatus.reverse ||
+                          //       _magnifierAnimController.status == AnimationStatus.forward,
+                          //   animationDuration: Duration.zero,
+                          // ),
+                          onSelectionHandlePanStart: (anchor) {
+                            setState(() {
+                              _isDraggingHandle = true;
+                            });
+                          },
+
+                          onSelectionHandlePanEnd: (anchor) {
+                            // Animate out, then reset for next drag
+                            if (mounted) {
+                              setState(() {
+                                _isDraggingHandle = false;
+                              });
+                            }
+                            _magnifierAnimController.reverse().then((_) {
+                              _magnifierAnimController.reset();
+                            });
                           },
                         ),
                         keyHandlerParams: PdfViewerKeyHandlerParams(autofocus: true),
                         useAlternativeFitScaleAsMinScale: false,
                         maxScale: 8,
-                        onViewSizeChanged: (viewSize, oldViewSize, controller) {
-                          if (oldViewSize != null) {
-                            //
-                            // Calculate the matrix to keep the center position during device
-                            // screen rotation
-                            //
-                            // The most important thing here is that the transformation matrix
-                            // is not changed on the view change.
-                            final centerPosition = controller.value.calcPosition(oldViewSize);
-                            final newMatrix = controller.calcMatrixFor(centerPosition);
-                            // Don't change the matrix in sync; the callback might be called
-                            // during widget-tree's build process.
-                            Future.delayed(const Duration(milliseconds: 200), () => controller.goTo(newMatrix));
-                          }
+                        // #547: At least, on Flutter Web on Windows, the default scroll physics
+                        // seems to have some issues with zooming and we don't use it here.
+                        //scrollPhysics: PdfViewerParams.getScrollPhysics(context),
+                        customizeContextMenuItems: (params, items) {
+                          // Example: add custom menu item to search selected text on web
+                          items.add(
+                            ContextMenuButtonItem(
+                              type: ContextMenuButtonType.searchWeb,
+                              onPressed: () async {
+                                final text = await controller.textSelectionDelegate.getSelectedText();
+                                if (text.isNotEmpty) {
+                                  final shortened = text.length > 100 ? text.substring(0, 100) : text;
+                                  await launchUrl(
+                                    Uri.parse('https://www.google.com/search?q=${Uri.encodeComponent(shortened)}'),
+                                  );
+                                }
+                              },
+                            ),
+                          );
                         },
                         viewerOverlayBuilder: (context, size, handleLinkTap) => [
                           //
@@ -438,7 +584,6 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
                                 if (count > 0) {
                                   await PdfrxEntryFunctions.instance.reloadFonts();
                                   await controller.documentRef.resolveListenable().load(forceReload: true);
-                                  //controller.forceRepaintAllPageImages();
                                 }
                               });
                             }
@@ -492,7 +637,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
     null,
     // Horizontal layout
     (pages, params) {
-      final height = pages.fold(0.0, (prev, page) => max(prev, page.height)) + params.margin * 2;
+      final height = pages.fold(0.0, (prev, page) => math.max(prev, page.height)) + params.margin * 2;
       final pageLayouts = <Rect>[];
       double x = params.margin;
       for (var page in pages) {
@@ -510,7 +655,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
     },
     // Facing pages layout
     (pages, params) {
-      final width = pages.fold(0.0, (prev, page) => max(prev, page.width));
+      final width = pages.fold(0.0, (prev, page) => math.max(prev, page.width));
 
       final pageLayouts = <Rect>[];
       final offset = needCoverPage ? 1 : 0;
@@ -521,7 +666,9 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
         final isLeft = isRightToLeftReadingOrder ? (pos & 1) == 1 : (pos & 1) == 0;
 
         final otherSide = (pos ^ 1) - offset;
-        final h = 0 <= otherSide && otherSide < pages.length ? max(page.height, pages[otherSide].height) : page.height;
+        final h = 0 <= otherSide && otherSide < pages.length
+            ? math.max(page.height, pages[otherSide].height)
+            : page.height;
 
         pageLayouts.add(
           Rect.fromLTWH(
@@ -620,7 +767,7 @@ class _MainPageState extends State<MainPage> with WidgetsBindingObserver {
       final bytes = await file.readAsBytes();
       documentRef.value = PdfDocumentRefData(
         bytes,
-        sourceName: file.name,
+        sourceName: 'web-open-file%${file.name}',
         passwordProvider: () => passwordDialog(context),
         useProgressiveLoading: useProgressiveLoading,
       );

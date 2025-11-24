@@ -1,3 +1,147 @@
+# 2.2.16
+
+- Updated to pdfrx_engine 0.3.4
+- NEW: Progressive loading helper functions - [`ensureLoaded()`](https://pub.dev/documentation/pdfrx_engine/latest/pdfrx_engine/PdfPageBaseExtensions/ensureLoaded.html) and [`waitForLoaded()`](https://pub.dev/documentation/pdfrx_engine/latest/pdfrx_engine/PdfPageBaseExtensions/waitForLoaded.html)
+- NEW: [`PdfPageStatusChange.page`](https://pub.dev/documentation/pdfrx_engine/latest/pdfrx_engine/PdfPageStatusChange/page.html) property for easier access to updated page instances
+- NEW: Added comprehensive [Progressive Loading documentation](https://github.com/espresso3389/pdfrx/blob/master/doc/Progressive-Loading.md)
+
+# 2.2.15
+
+- FIXED: Focus context retrieval issue in [PdfViewerKeyHandler](https://pub.dev/documentation/pdfrx/latest/pdfrx/PdfViewerKeyHandler-class.html) ([#518](https://github.com/espresso3389/pdfrx/issues/518))
+
+# 2.2.14
+
+- Minor changes.
+
+# 2.2.13
+
+- FIXED: [PdfTextSearcher](https://pub.dev/documentation/pdfrx/latest/pdfrx/PdfTextSearcher-class.html) not in sync on [PdfDocument](https://pub.dev/documentation/pdfrx/latest/pdfrx/PdfDocument-class.html) update ([#515](https://github.com/espresso3389/pdfrx/issues/515))
+- FIXED: Focus.of -> Focus.maybeOf to prevent exceptions when FocusNode is not available ([#518](https://github.com/espresso3389/pdfrx/issues/518))
+- FIXED: Crash when opening an empty PDF - now treated as a valid PDF to keep consistency with existing editing feature ([#544](https://github.com/espresso3389/pdfrx/issues/544))
+- FIXED: [PdfViewerParams.onGeneralTap](https://pub.dev/documentation/pdfrx/latest/pdfrx/PdfViewerParams/onGeneralTap.html) one-click not working ([#540](https://github.com/espresso3389/pdfrx/issues/540))
+- IMPROVED: Document reference comparison now uses key for better consistency ([#543](https://github.com/espresso3389/pdfrx/pull/543))
+
+# 2.2.12
+
+- FIXED: Package incorrectly showing as web-only on pub.dev due to incorrect Flutter plugin platform declarations ([#535](https://github.com/espresso3389/pdfrx/issues/535))
+
+# 2.2.11
+
+- FIXED: Magnifier content location calculated incorrectly ([#532](https://github.com/espresso3389/pdfrx/issues/532))
+- NEW: Added `PdfViewerController.localToDocument()` and `PdfViewerController.documentToLocal()` methods for coordinate conversion
+- Updated to pdfrx_engine 0.3.3
+
+# 2.2.10
+
+- Updated to pdfrx_engine 0.3.1 and pdfium_flutter 0.1.1
+
+# 2.2.9
+
+- Updated to pdfrx_engine 0.3.0
+
+# 2.2.8
+
+- NEW: `PdfDocument` now supports page re-arrangement and accepts `PdfPage` instances from other documents, enabling PDF combine/merge functionality
+- Added `pdf_combine` app example demonstrating PDF merging capabilities
+- Updated to pdfrx_engine 0.2.4
+
+# 2.2.7
+
+- `PdfViewer.uri` now supports timeout parameter ([#508](https://github.com/espresso3389/pdfrx/issues/508))
+
+# 2.2.6
+
+- Added configurable timeout parameter to `openUri` and `pdfDocumentFromUri` functions ([#509](https://github.com/espresso3389/pdfrx/pull/509))
+- Updated to pdfrx_engine 0.2.3
+
+# 2.2.5
+
+- Experimental iOS/macOS direct symbol lookup to address SwiftPM TestFlight/App Store symbol lookup issues ([#501](https://github.com/espresso3389/pdfrx/issues/501))
+- `pdfrxFlutterInitialize()` now internally calls `WidgetsFlutterBinding.ensureInitialized()` - no need to call it explicitly
+- Updated to pdfrx_engine 0.2.2
+
+# 2.2.4
+
+- FIXED: SwiftPM/pod package structure updates for iOS/macOS ([#501](https://github.com/espresso3389/pdfrx/issues/501))
+- Updated to pdfrx_engine 0.2.1
+
+# 2.2.3
+
+- POSSIBLE FIX: Error on `openFile()` or `openAsset()` on iOS production builds installed from AppStore/TestFlight ([#501](https://github.com/espresso3389/pdfrx/issues/501))
+
+# 2.2.2
+
+- FIXED: InteractiveViewer ScrollPhysics pinch-zoom centering issues ([#502](https://github.com/espresso3389/pdfrx/issues/502))
+
+# 2.2.1
+
+- FIXED: PDF not visible initially if `_alternativeFitScale` is null ([#495](https://github.com/espresso3389/pdfrx/issues/495))
+
+# 2.2.0
+
+- **BREAKING**: Renamed `PdfrxEntryFunctions.initPdfium()` to `PdfrxEntryFunctions.init()` for consistency
+- NEW: Added `dart run pdfrx:remove_darwin_pdfium_modules` command to remove PDFium dependencies from iOS/macOS when using alternative backends like pdfrx_coregraphics
+- Updated to pdfrx_engine 0.2.0
+
+# 2.1.26
+
+- FIXED: PDF not visible initially when loading takes relatively long ([#495](https://github.com/espresso3389/pdfrx/issues/495))
+
+# 2.1.25
+
+- FIXED: Added ArrayBuffer fallback when `WebAssembly.instantiateStreaming` fails (e.g. missing `application/wasm` MIME type) ([#405](https://github.com/espresso3389/pdfrx/issues/405), [#493](https://github.com/espresso3389/pdfrx/issues/493))
+
+# 2.1.24
+
+- FIXED: Strange zooming out behavior ([#490](https://github.com/espresso3389/pdfrx/issues/490))
+
+# 2.1.23
+
+- FIXED: WASM+Safari StringBuffer issue with workaround ([#483](https://github.com/espresso3389/pdfrx/issues/483))
+- Introduces `PdfDocumentRefKey` for more flexible `PdfDocumentRef` identification
+- Updated to pdfrx_engine 0.1.21
+
+# 2.1.22
+
+- NEW: Introducing [PdfViewerController.zoomOnLocalPosition](https://pub.dev/documentation/pdfrx/latest/pdfrx/PdfViewerController/zoomOnLocalPosition.html) and its variants for consistent zooming on cursor/finger position ([#486](https://github.com/espresso3389/pdfrx/issues/486), [#462](https://github.com/espresso3389/pdfrx/issues/462))
+- PdfViewer now handles Ctrl+wheel to zoom up/down ([#486](https://github.com/espresso3389/pdfrx/issues/486))
+
+# 2.1.21
+
+- FIXED: Web compatibility issue where `dart:io` was imported in public-facing code
+
+# 2.1.20
+
+- Added [PdfViewerParams.scrollPhysics](https://pub.dev/documentation/pdfrx/latest/pdfrx/PdfViewerParams/scrollPhysics.html) and [PdfViewerParams.scrollPhysicsScale](https://pub.dev/documentation/pdfrx/latest/pdfrx/PdfViewerParams/scrollPhysicsScale.html) so you can plug in custom [ScrollPhysics](https://api.flutter.dev/flutter/widgets/ScrollPhysics-class.html) for both panning and pinch-zoom interactions
+  - PR [#481](https://github.com/espresso3389/pdfrx/issues/481), [#482](https://github.com/espresso3389/pdfrx/issues/482), [#484](https://github.com/espresso3389/pdfrx/issues/484), [#485](https://github.com/espresso3389/pdfrx/issues/485) by [enhancient](https://github.com/enhancient)
+- FIXED: regression where `dart run pdfrx:remove_wasm_modules` failed with dart_pubspec_licenses 3.0.12 ([#443](https://github.com/espresso3389/pdfrx/issues/443)).
+
+# 2.1.19
+
+- Maintenance release: applied `dart format` to keep code integrity with Dart 3.9/Flutter 3.29 tooling.
+
+# 2.1.18
+
+- Remove broken docImport not to crash dartdoc ([dart-lang/dartdoc#4106](https://github.com/dart-lang/dartdoc/issues/4106))
+
+# 2.1.17
+
+- FIXED: `dart run pdfrx:remove_wasm_modules` could fail with "Too many open files" during WASM cleanup ([#476](https://github.com/espresso3389/pdfrx/issues/476))
+- Updated dependencies, including pdfrx_engine 0.1.18
+
+# 2.1.16
+
+- [#474](https://github.com/espresso3389/pdfrx/issues/474) Add [PdfrxEntryFunctions.initPdfium](https://pub.dev/documentation/pdfrx/latest/pdfrx/PdfrxEntryFunctions/initPdfium.html) to explicitly call FPDF_InitLibraryWithConfig and [pdfrxInitialize](https://pub.dev/documentation/pdfrx/latest/pdfrx/pdfrxInitialize.html)/[pdfrxFlutterInitialize](https://pub.dev/documentation/pdfrx/latest/pdfrx/pdfrxFlutterInitialize.html) internally call it
+- [#474](https://github.com/espresso3389/pdfrx/issues/474) Add [PdfrxEntryFunctions.suspendPdfiumWorkerDuringAction](https://pub.dev/documentation/pdfrx/latest/pdfrx/PdfrxEntryFunctions/suspendPdfiumWorkerDuringAction.html)
+- Documentation improvements for low-level PDFium bindings access/PDFium interoperability and initialization
+- Updated to pdfrx_engine 0.1.17
+
+# 2.1.15
+
+- FIXED: Package.swift does not point to pdfium-apple-v11 dependencies correctly
+- More error handling logic for improved stability ([#468](https://github.com/espresso3389/pdfrx/issues/468))
+- Updated to pdfrx_engine 0.1.16
+
 # 2.1.14
 
 - Enhance podspec script to check for existing PDFium frameworks before downloading ([#396](https://github.com/espresso3389/pdfrx/issues/396), [#460](https://github.com/espresso3389/pdfrx/issues/460))
