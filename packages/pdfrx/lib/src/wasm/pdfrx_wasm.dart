@@ -113,6 +113,16 @@ class PdfrxEntryFunctionsWasmImpl extends PdfrxEntryFunctions {
     return await action();
   }
 
+  @override
+  Future<R> compute<M, R>(FutureOr<R> Function(M message) callback, M message) async {
+    throw UnimplementedError('compute() is not implemented for WASM backend.');
+  }
+
+  @override
+  Future<void> stopBackgroundWorker() async {
+    throw UnimplementedError('stopBackgroundWorker() is not implemented for WASM backend.');
+  }
+
   static String? _pdfiumWasmModulesUrlFromMetaTag() {
     final meta = web.document.querySelector('meta[name="pdfium-wasm-module-url"]') as web.HTMLMetaElement?;
     return meta?.content;
@@ -194,6 +204,7 @@ class PdfrxEntryFunctionsWasmImpl extends PdfrxEntryFunctions {
     sourceName: sourceName ?? _sourceNameFromData(data),
     passwordProvider: passwordProvider,
     firstAttemptByEmptyPassword: firstAttemptByEmptyPassword,
+    useProgressiveLoading: useProgressiveLoading,
     onDispose: onDispose,
   );
 
@@ -218,6 +229,7 @@ class PdfrxEntryFunctionsWasmImpl extends PdfrxEntryFunctions {
     sourceName: 'file%$filePath',
     passwordProvider: passwordProvider,
     firstAttemptByEmptyPassword: firstAttemptByEmptyPassword,
+    useProgressiveLoading: useProgressiveLoading,
     onDispose: null,
   );
 
@@ -253,13 +265,14 @@ class PdfrxEntryFunctionsWasmImpl extends PdfrxEntryFunctions {
             'useProgressiveLoading': useProgressiveLoading,
             if (progressCallbackReg != null) 'progressCallbackId': progressCallbackReg.id,
             'preferRangeAccess': preferRangeAccess,
-            if (headers != null) 'headers': headers,
+            'headers': ?headers,
             'withCredentials': withCredentials,
           },
         ),
         sourceName: 'uri%$uri',
         passwordProvider: passwordProvider,
         firstAttemptByEmptyPassword: firstAttemptByEmptyPassword,
+        useProgressiveLoading: useProgressiveLoading,
         onDispose: cleanupCallbacks,
       );
     } catch (e) {
@@ -273,6 +286,7 @@ class PdfrxEntryFunctionsWasmImpl extends PdfrxEntryFunctions {
     required String sourceName,
     required PdfPasswordProvider? passwordProvider,
     required bool firstAttemptByEmptyPassword,
+    required bool useProgressiveLoading,
     required void Function()? onDispose,
   }) async {
     await init();
@@ -299,7 +313,12 @@ class PdfrxEntryFunctionsWasmImpl extends PdfrxEntryFunctions {
         throw StateError('Failed to open document: ${result['errorCodeStr']} ($errorCode)');
       }
 
-      return _PdfDocumentWasm._(result, sourceName: sourceName, disposeCallback: onDispose);
+      return _PdfDocumentWasm._(
+        result,
+        sourceName: sourceName,
+        disposeCallback: onDispose,
+        useProgressiveLoading: useProgressiveLoading,
+      );
     }
   }
 
@@ -311,7 +330,7 @@ class PdfrxEntryFunctionsWasmImpl extends PdfrxEntryFunctions {
     if (errorCode != null) {
       throw StateError('Failed to create new document: ${result['errorCodeStr']} ($errorCode)');
     }
-    return _PdfDocumentWasm._(result, sourceName: sourceName, disposeCallback: null);
+    return _PdfDocumentWasm._(result, sourceName: sourceName, disposeCallback: null, useProgressiveLoading: false);
   }
 
   @override
@@ -332,7 +351,12 @@ class PdfrxEntryFunctionsWasmImpl extends PdfrxEntryFunctions {
     if (errorCode != null) {
       throw StateError('Failed to create document from JPEG data: ${result['errorCodeStr']} ($errorCode)');
     }
-    return _PdfDocumentWasm._(result, sourceName: sourceName, disposeCallback: null);
+    return _PdfDocumentWasm._(result, sourceName: sourceName, disposeCallback: null, useProgressiveLoading: false);
+  }
+
+  @override
+  Future<void> configureFontEnvironment({String? fontCachePath, List<String> fontPaths = const []}) async {
+    await init();
   }
 
   @override
@@ -342,10 +366,19 @@ class PdfrxEntryFunctionsWasmImpl extends PdfrxEntryFunctions {
   }
 
   @override
-  Future<void> addFontData({required String face, required Uint8List data}) async {
+  Future<void> addFontData({required String face, required Uint8List data, String? resolvedFace}) async {
     await init();
     final jsData = data.buffer.toJS;
-    await _sendCommand('addFontData', parameters: {'face': face, 'data': jsData}, transfer: [jsData].toJS);
+    await _sendCommand(
+      'addFontData',
+      parameters: {'face': face, 'data': jsData, 'resolvedFace': ?resolvedFace},
+      transfer: [jsData].toJS,
+    );
+  }
+
+  @override
+  Future<void> addFontFile({required String face, required String filePath, String? resolvedFace}) async {
+    // Browser workers cannot synchronously read arbitrary local files.
   }
 
   @override
@@ -355,14 +388,25 @@ class PdfrxEntryFunctionsWasmImpl extends PdfrxEntryFunctions {
   }
 
   @override
-  PdfrxBackend get backend => PdfrxBackend.pdfiumWasm;
+  PdfrxBackendType get backendType => PdfrxBackendType.pdfiumWasm;
 }
 
 class _PdfDocumentWasm extends PdfDocument {
-  _PdfDocumentWasm._(this.document, {required super.sourceName, this.disposeCallback})
-    : permissions = parsePermissions(document) {
+  _PdfDocumentWasm._(
+    this.document, {
+    required super.sourceName,
+    required bool useProgressiveLoading,
+    this.disposeCallback,
+  }) : permissions = parsePermissions(document) {
     _pages = parsePages(this, document['pages'] as List<dynamic>);
     updateMissingFonts(document['missingFonts']);
+    if (!useProgressiveLoading) {
+      _notifyDocumentLoadComplete();
+    }
+  }
+
+  void _notifyDocumentLoadComplete() {
+    subject.add(PdfDocumentLoadCompleteEvent(this));
   }
 
   final Map<Object?, dynamic> document;
@@ -448,6 +492,34 @@ class _PdfDocumentWasm extends PdfDocument {
           }
         }
       }
+      // All pages loaded
+      if (firstPageIndex >= pages.length) {
+        _notifyDocumentLoadComplete();
+      }
+    });
+  }
+
+  @override
+  Future<void> reloadPages({List<int>? pageNumbersToReload}) async {
+    if (isDisposed) return;
+    await synchronized(() async {
+      final pageIndices = pageNumbersToReload?.map((n) => n - 1).toList();
+      final result = await _sendCommand(
+        'reloadPages',
+        parameters: {
+          'docHandle': document['docHandle'],
+          'pageIndices': ?pageIndices,
+          'currentPagesCount': pages.length,
+        },
+      );
+      final reloadedPages = parsePages(this, result['pages'] as List<dynamic>);
+      final newPages = pages.toList(growable: false);
+      for (final page in reloadedPages) {
+        newPages[page.pageNumber - 1] = page; // Update the existing page
+      }
+      pages = newPages;
+
+      updateMissingFonts(result['missingFonts']);
     });
   }
 
@@ -603,6 +675,11 @@ class _PdfDocumentWasm extends PdfDocument {
     );
     final bb = result['data'] as ByteBuffer;
     return Uint8List.view(bb.asByteData().buffer, 0, bb.lengthInBytes);
+  }
+
+  @override
+  Future<T> useNativeDocumentHandle<T>(FutureOr<T> Function(int nativeDocumentHandle) task) {
+    throw UnimplementedError('PdfDocument.useNativeDocumentHandle is not implemented for WASM backend.');
   }
 }
 

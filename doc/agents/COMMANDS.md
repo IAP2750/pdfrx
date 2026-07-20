@@ -1,0 +1,134 @@
+# Commands Reference
+
+## Environment Notes
+
+- This project uses a **pub workspace**. Running `dart pub get` in any directory fetches dependencies for all packages.
+- Published package pubspecs currently require Dart 3.10+ and Flutter 3.41+ where Flutter is used; workspace/example pubspecs may allow older SDKs for local tooling.
+- `pdfium_dart` uses Dart native assets and requires recent Dart/Flutter tooling.
+- Prefer `rg`/`rg --files` for search and discovery tasks; they are significantly faster than alternatives.
+- When running commands as an agent, prefer an explicit command `workdir`. The `cd ...` examples below are for humans running commands manually.
+
+## Windows-Specific Notes (Claude Code)
+
+When running on Windows, Claude Code's Bash tool runs in a POSIX-like shell environment. Be aware of these issues:
+
+### Path Handling
+
+- **Use forward slashes** or properly escaped backslashes in paths
+- **Windows paths like `d:\pdfrx`** may not work directly; wrap commands with `pwsh.exe -Command "..."`
+- When using `cd`, the path may fail silently; prefer running commands with full paths or use PowerShell
+
+### Command Execution
+
+```bash
+# WRONG - may fail with path issues
+cd d:\pdfrx\packages\pdfrx && flutter pub get
+
+# CORRECT - use PowerShell wrapper
+pwsh.exe -Command "cd 'd:\pdfrx\packages\pdfrx'; flutter pub get"
+```
+
+### Git Commands
+
+```bash
+# WRONG - cd may not work as expected
+cd d:\pdfrx && git status
+
+# CORRECT - use -C flag for git
+git -C "d:\pdfrx" status
+git -C "d:\pdfrx" log --oneline -10
+
+# Or use PowerShell
+pwsh.exe -Command "cd 'd:\pdfrx'; git status"
+```
+
+### Publishing Packages
+
+```bash
+# Use PowerShell for pub publish
+pwsh.exe -Command "cd 'd:\pdfrx\packages\pdfrx'; flutter pub publish --force"
+pwsh.exe -Command "cd 'd:\pdfrx\packages\pdfrx_engine'; dart pub publish --force"
+```
+
+### GitHub CLI (gh)
+
+```bash
+# gh commands work directly but use proper quoting
+gh issue comment 123 --repo espresso3389/pdfrx --body "Comment text here"
+```
+
+## Common Commands
+
+Commands below use standard shell syntax. On Windows with Claude Code, wrap with `pwsh.exe -Command "..."` as shown in the Windows-Specific Notes section above.
+
+### Flutter Plugin (packages/pdfrx)
+
+```bash
+cd packages/pdfrx
+flutter pub get
+flutter analyze
+flutter test
+dart format .
+```
+
+### Core Engine (packages/pdfrx_engine)
+
+```bash
+cd packages/pdfrx_engine
+dart pub get
+dart analyze
+dart test
+dart format .
+```
+
+## Platform Builds
+
+```bash
+cd packages/pdfrx/example/viewer
+flutter run
+flutter build appbundle    # Android
+flutter build ios          # iOS
+flutter build web --wasm   # Web
+flutter build linux        # Linux
+flutter build windows      # Windows
+flutter build macos        # macOS
+```
+
+## FFI Bindings
+
+FFI bindings for PDFium are maintained in the `pdfium_dart` package and generated using `ffigen`.
+
+### Prerequisites
+
+The `ffigen` process requires LLVM/Clang:
+
+- **macOS**: `brew install llvm`
+- **Linux (Ubuntu/Debian)**: `apt-get install libclang-dev`
+- **Linux (Fedora)**: `dnf install clang-devel`
+- **Windows**: Install LLVM from [llvm.org](https://releases.llvm.org/)
+
+### Generating Bindings
+
+```bash
+# For pdfium_dart package
+cd packages/pdfium_dart
+dart tool/ffigen.dart  # Downloads PDFium headers and runs ffigen
+```
+
+### PDFium Native Assets
+
+The `pdfium_dart` package downloads PDFium during the Dart/Flutter build hook and exposes it as a native asset. `getPdfium()` first honors an explicit `modulePath`, uses Flutter-packaged PDFium when appropriate (for example the iOS/macOS XCFramework and Linux shared library directory), and falls back to the bundled native asset. `pdfrxInitialize()` also honors `PDFIUM_PATH`.
+
+## Testing
+
+Tests run build hooks automatically for supported platforms.
+
+```bash
+# Test pdfrx_engine
+cd packages/pdfrx_engine
+dart test
+
+# Test pdfrx Flutter plugin
+cd packages/pdfrx
+flutter test
+```

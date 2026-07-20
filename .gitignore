@@ -9,6 +9,7 @@
 .history
 .svn/
 migrate_working_dir/
+.tmp/
 
 # IntelliJ related
 *.iml
@@ -49,3 +50,6 @@ pubspec_overrides.yaml
 build/ios/
 
 .flutter-plugins-dependencies
+
+doc/api/
+

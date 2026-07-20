@@ -1,5 +1,6 @@
 // ignore_for_file: public_member_api_docs, sort_constructors_first
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
@@ -9,6 +10,7 @@ import 'dart:ui';
 
 import 'package:crypto/crypto.dart';
 import 'package:ffi/ffi.dart';
+import 'package:meta/meta.dart';
 import 'package:pdfium_dart/pdfium_dart.dart' as pdfium_bindings;
 import 'package:rxdart/rxdart.dart';
 import 'package:synchronized/extension.dart';
@@ -32,109 +34,122 @@ import '../pdf_text.dart';
 import '../pdfrx.dart';
 import '../pdfrx_entry_functions.dart';
 import '../utils/shuffle_in_place.dart';
-import 'native_utils.dart';
 import 'pdf_file_cache.dart';
 import 'pdfium.dart';
 import 'pdfium_file_access.dart';
 import 'worker.dart';
 
-Directory? _appLocalFontPath;
+String? _fontCachePath;
+List<String> _fontPaths = const [];
 
 bool _initialized = false;
 final _initSync = Object();
+
+/// Whether PDFium has been initialized on the caller's isolate.
+@visibleForTesting
+bool get isPdfiumInitialized => _initialized;
 
 /// Initializes PDFium library.
 Future<void> _init() async {
   if (_initialized) return;
   await _initSync.synchronized(() async {
     if (_initialized) return;
-
-    _appLocalFontPath = await getCacheDirectory('pdfrx.fonts');
-
-    (await BackgroundWorker.instance).computeWithArena((arena, params) {
-      final config = arena<pdfium_bindings.FPDF_LIBRARY_CONFIG>();
-      config.ref.version = 2;
-
-      final fontPaths = [?params.appLocalFontPath?.path, ...params.fontPaths];
-      if (fontPaths.isNotEmpty) {
-        // NOTE: m_pUserFontPaths must not be freed until FPDF_DestroyLibrary is called; on pdfrx, it's never freed.
-        final fontPathArray = malloc<Pointer<Char>>(fontPaths.length + 1);
-        for (var i = 0; i < fontPaths.length; i++) {
-          fontPathArray[i] = fontPaths[i]
-              .toNativeUtf8()
-              .cast<Char>(); // NOTE: the block allocated by toNativeUtf8 never released
-        }
-        fontPathArray[fontPaths.length] = nullptr;
-        config.ref.m_pUserFontPaths = fontPathArray;
-      } else {
-        config.ref.m_pUserFontPaths = nullptr;
-      }
-
-      config.ref.m_pIsolate = nullptr;
-      config.ref.m_v8EmbedderSlot = 0;
-      pdfium.FPDF_InitLibraryWithConfig(config);
-      _initialized = true;
-    }, (appLocalFontPath: _appLocalFontPath, fontPaths: Pdfrx.fontPaths));
+    await BackgroundWorker.compute((params) {
+      pdfium.FPDF_InitLibrary();
+    }, null);
+    // Set on this isolate, not inside the worker callback: top-level variables are per-isolate.
+    _initialized = true;
   });
 
-  await _initializeFontEnvironment();
+  await _installFontMapper();
 }
 
-/// Stores the fonts that were not found during mapping.
-/// NOTE: This is used by [BackgroundWorker] and should not be used directly; use [_getAndClearMissingFonts] instead.
-final _lastMissingFonts = <String, PdfFontQuery>{};
+Future<void> _deinit() async {
+  await BackgroundWorker.compute((params) {
+    pdfium.FPDF_DestroyLibrary();
+    _fontMapper?.dispose();
+    _fontMapper = null;
+  }, {});
+  await BackgroundWorker.stop();
+  _initialized = false;
+}
 
-/// MapFont function used by PDFium to map font requests to system fonts.
-/// NOTE: This is used by [BackgroundWorker] and should not be used directly.
-NativeCallable<
-  Pointer<Void> Function(
-    Pointer<pdfium_bindings.FPDF_SYSFONTINFO>,
-    Int,
-    pdfium_bindings.FPDF_BOOL,
-    Int,
-    Int,
-    Pointer<Char>,
-    Pointer<pdfium_bindings.FPDF_BOOL>,
-  )
->?
-_mapFont;
+_PdfFontMapper? _fontMapper;
 
-/// Setup the system font info in PDFium.
-Future<void> _initializeFontEnvironment() async {
-  await (await BackgroundWorker.instance).computeWithArena((arena, params) {
-    // kBase14FontNames
-    const fontNamesToIgnore = {
-      'Courier': true,
-      'Courier-Bold': true,
-      'Courier-BoldOblique': true,
-      'Courier-Oblique': true,
-      'Helvetica': true,
-      'Helvetica-Bold': true,
-      'Helvetica-BoldOblique': true,
-      'Helvetica-Oblique': true,
-      'Times-Roman': true,
-      'Times-Bold': true,
-      'Times-BoldItalic': true,
-      'Times-Italic': true,
-      'Symbol': true,
-      'ZapfDingbats': true,
-    };
+/// Install the system font info in PDFium.
+Future<void> _installFontMapper() async {
+  await BackgroundWorker.compute((params) {
+    if (_fontMapper != null) {
+      return;
+    }
+    final fontMapper = _PdfFontMapper()..install();
+    fontMapper.addFontFiles(fontCachePath: params.fontCachePath, fontPaths: params.fontPaths);
+    _fontMapper = fontMapper;
 
-    final sysFontInfoBuffer = pdfium.FPDF_GetDefaultSystemFontInfo();
-    final mapFontOriginal = sysFontInfoBuffer.ref.MapFont
-        .asFunction<
-          Pointer<Void> Function(
-            Pointer<pdfium_bindings.FPDF_SYSFONTINFO>,
-            int,
-            int,
-            int,
-            int,
-            Pointer<Char>,
-            Pointer<pdfium_bindings.FPDF_BOOL>,
-          )
-        >();
+    // PDFium keeps this pointer. The mapper instance must remain alive until PDFium is destroyed.
+    pdfium.FPDF_SetSystemFontInfo(fontMapper.sysFontInfo);
+  }, (fontCachePath: _fontCachePath, fontPaths: _fontPaths));
+}
 
-    _mapFont?.close();
+/// Reload font files into the current mapper without reinstalling PDFium callbacks.
+Future<void> _reloadFontFiles() async {
+  await BackgroundWorker.compute((params) {
+    _fontMapper?.addFontFiles(fontCachePath: params.fontCachePath, fontPaths: params.fontPaths);
+  }, (fontCachePath: _fontCachePath, fontPaths: _fontPaths));
+}
+
+/// Retrieve and clear the last missing fonts from the worker-side font mapper.
+Future<List<PdfFontQuery>> _getAndClearMissingFonts() async {
+  return await BackgroundWorker.compute((params) {
+    return _fontMapper?.getAndClearMissingFonts() ?? const <PdfFontQuery>[];
+  }, null);
+}
+
+class _PdfFontMapper {
+  _PdfFontMapper() {
+    _sysFontInfo.ref.version = 2;
+  }
+
+  final Pointer<pdfium_bindings.FPDF_SYSFONTINFO> _sysFontInfo = calloc<pdfium_bindings.FPDF_SYSFONTINFO>();
+
+  Pointer<pdfium_bindings.FPDF_SYSFONTINFO> get sysFontInfo => _sysFontInfo;
+
+  final _missingFonts = <String, PdfFontQuery>{};
+  final _cachedFonts = <String, _CachedFont>{};
+  final _mappedFonts = <int, _CachedFont>{};
+  final _aliases = <String, String>{};
+  var _nextMappedFontHandle = 1;
+
+  late final NativeCallable<
+    Pointer<Void> Function(
+      Pointer<pdfium_bindings.FPDF_SYSFONTINFO>,
+      Int,
+      pdfium_bindings.FPDF_BOOL,
+      Int,
+      Int,
+      Pointer<Char>,
+      Pointer<pdfium_bindings.FPDF_BOOL>,
+    )
+  >
+  _mapFont;
+  late final NativeCallable<
+    UnsignedLong Function(
+      Pointer<pdfium_bindings.FPDF_SYSFONTINFO>,
+      Pointer<Void>,
+      UnsignedInt,
+      Pointer<UnsignedChar>,
+      UnsignedLong,
+    )
+  >
+  _getFontData;
+  late final NativeCallable<
+    UnsignedLong Function(Pointer<pdfium_bindings.FPDF_SYSFONTINFO>, Pointer<Void>, Pointer<Char>, UnsignedLong)
+  >
+  _getFaceName;
+  late final NativeCallable<Int Function(Pointer<pdfium_bindings.FPDF_SYSFONTINFO>, Pointer<Void>)> _getFontCharset;
+  late final NativeCallable<Void Function(Pointer<pdfium_bindings.FPDF_SYSFONTINFO>, Pointer<Void>)> _deleteFont;
+
+  void install() {
     _mapFont =
         NativeCallable<
           Pointer<Void> Function(
@@ -146,46 +161,423 @@ Future<void> _initializeFontEnvironment() async {
             Pointer<Char>,
             Pointer<pdfium_bindings.FPDF_BOOL>,
           )
-        >.isolateLocal((
-          Pointer<pdfium_bindings.FPDF_SYSFONTINFO> sysFontInfo,
-          int weight,
-          int italic,
-          int charset,
-          int pitchFamily,
-          Pointer<Char> face,
-          Pointer<pdfium_bindings.FPDF_BOOL> bExact,
-        ) {
-          final result = mapFontOriginal(sysFontInfo, weight, italic, charset, pitchFamily, face, bExact);
-          if (result.address == 0) {
-            final faceName = face.cast<Utf8>().toDartString();
-            if (!fontNamesToIgnore.containsKey(faceName)) {
-              _lastMissingFonts[faceName] = PdfFontQuery(
-                face: faceName,
-                weight: weight,
-                isItalic: italic != 0,
-                charset: PdfFontCharset.fromPdfiumCharsetId(charset),
-                pitchFamily: pitchFamily,
-              );
-            }
-          }
-          return result;
-        });
+        >.isolateLocal(_mapFontCallback);
+    _getFontData =
+        NativeCallable<
+          UnsignedLong Function(
+            Pointer<pdfium_bindings.FPDF_SYSFONTINFO>,
+            Pointer<Void>,
+            UnsignedInt,
+            Pointer<UnsignedChar>,
+            UnsignedLong,
+          )
+        >.isolateLocal(_getFontDataCallback, exceptionalReturn: 0);
+    _getFaceName =
+        NativeCallable<
+          UnsignedLong Function(Pointer<pdfium_bindings.FPDF_SYSFONTINFO>, Pointer<Void>, Pointer<Char>, UnsignedLong)
+        >.isolateLocal(_getFaceNameCallback, exceptionalReturn: 0);
+    _getFontCharset =
+        NativeCallable<Int Function(Pointer<pdfium_bindings.FPDF_SYSFONTINFO>, Pointer<Void>)>.isolateLocal(
+          _getFontCharsetCallback,
+          exceptionalReturn: 1,
+        );
+    _deleteFont = NativeCallable<Void Function(Pointer<pdfium_bindings.FPDF_SYSFONTINFO>, Pointer<Void>)>.isolateLocal(
+      _deleteFontCallback,
+    );
 
-    sysFontInfoBuffer.ref.MapFont = _mapFont!.nativeFunction;
+    _sysFontInfo.ref.MapFont = _mapFont.nativeFunction;
+    _sysFontInfo.ref.GetFontData = _getFontData.nativeFunction;
+    _sysFontInfo.ref.GetFaceName = _getFaceName.nativeFunction;
+    _sysFontInfo.ref.GetFontCharset = _getFontCharset.nativeFunction;
+    _sysFontInfo.ref.DeleteFont = _deleteFont.nativeFunction;
+  }
 
-    // when registering a new SetSystemFontInfo, the previous one is automatically released
-    // and the only last one remains on memory
-    pdfium.FPDF_SetSystemFontInfo(sysFontInfoBuffer);
-  }, {});
+  void dispose() {
+    _mappedFonts.clear();
+    _mapFont.close();
+    _getFontData.close();
+    _getFaceName.close();
+    _getFontCharset.close();
+    _deleteFont.close();
+    calloc.free(_sysFontInfo);
+  }
+
+  List<PdfFontQuery> getAndClearMissingFonts() {
+    final fonts = _missingFonts.values.toList();
+    _missingFonts.clear();
+    return fonts;
+  }
+
+  void addFontFiles({required String? fontCachePath, required List<String> fontPaths}) {
+    final cachePath = fontCachePath;
+    if (cachePath != null) {
+      _addFontFilesFromDirectory(Directory(cachePath), decodeFaceFromFileName: true);
+    }
+    for (final path in fontPaths) {
+      final type = FileSystemEntity.typeSync(path);
+      if (type == FileSystemEntityType.directory) {
+        _addFontFilesFromDirectory(Directory(path), decodeFaceFromFileName: false);
+      } else if (type == FileSystemEntityType.file) {
+        _addFontFile(File(path), decodeFaceFromFileName: false);
+      }
+    }
+  }
+
+  void _addFontFilesFromDirectory(Directory directory, {required bool decodeFaceFromFileName}) {
+    if (!directory.existsSync()) {
+      return;
+    }
+    for (final entity in directory.listSync(recursive: true, followLinks: false)) {
+      if (entity is File && _isFontFile(entity.path)) {
+        _addFontFile(entity, decodeFaceFromFileName: decodeFaceFromFileName);
+      }
+    }
+  }
+
+  bool _isFontFile(String path) {
+    final lower = path.toLowerCase();
+    return lower.endsWith('.ttf') || lower.endsWith('.otf') || lower.endsWith('.ttc') || lower.endsWith('.otc');
+  }
+
+  void _addFontFile(File file, {required bool decodeFaceFromFileName}) {
+    final metadataData = _FontSource.readHeaderDataFromFile(file);
+    if (metadataData == null) {
+      return;
+    }
+    final fontOffset = _FontSource.getFontOffsetFromData(metadataData);
+    if (fontOffset == null) {
+      return;
+    }
+    final fontNames = _CachedFont.extractFontNames(metadataData, fontOffset);
+    final source = _FontSource.fromFile(file, fontOffset: fontOffset);
+    final resolvedFace = fontNames.isEmpty ? null : fontNames.first;
+    final faceFromFileName = decodeFaceFromFileName ? _decodeFontCacheFileName(file) : null;
+    if (faceFromFileName != null) {
+      stderr.writeln('Caching font "$faceFromFileName" from file ${file.path}');
+      _addCachedFont(_CachedFont(face: faceFromFileName, resolvedFace: resolvedFace, source: source, charset: null));
+    }
+    for (final fontName in fontNames) {
+      stderr.writeln('Caching font "$fontName" from file ${file.path}');
+      _addCachedFont(_CachedFont(face: fontName, resolvedFace: fontName, source: source, charset: null));
+    }
+  }
+
+  String? _decodeFontCacheFileName(File file) {
+    final fileName = file.uri.pathSegments.last;
+    final dotIndex = fileName.lastIndexOf('.');
+    final encodedName = dotIndex < 0 ? fileName : fileName.substring(0, dotIndex);
+    try {
+      return utf8.decode(base64Decode(encodedName));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void addFontData({required String face, required Uint8List data, String? resolvedFace}) {
+    final font = _CachedFont(
+      face: face,
+      resolvedFace: resolvedFace,
+      source: _FontSource.memory(Uint8List.fromList(data)),
+      charset: null,
+    );
+    _addCachedFont(font);
+    _missingFonts.remove(face);
+  }
+
+  void addFontFile({required String face, required String filePath, String? resolvedFace}) {
+    // Register the existing file directly. This path is used for platform
+    // fonts, so unlike addFontData it must not write a copy into the app cache.
+    final file = File(filePath);
+    final metadataData = _FontSource.readHeaderDataFromFile(file);
+    if (metadataData == null) {
+      return;
+    }
+    final fontOffset = _FontSource.getFontOffsetFromData(metadataData);
+    if (fontOffset == null) {
+      return;
+    }
+    final fontNames = _CachedFont.extractFontNames(metadataData, fontOffset);
+    final source = _FontSource.fromFile(file, fontOffset: fontOffset);
+    final resolvedFontFace = resolvedFace ?? (fontNames.isEmpty ? null : fontNames.first);
+    _addCachedFont(_CachedFont(face: face, resolvedFace: resolvedFontFace, source: source, charset: null));
+    for (final fontName in fontNames) {
+      _addCachedFont(_CachedFont(face: fontName, resolvedFace: fontName, source: source, charset: null));
+    }
+    _missingFonts.remove(face);
+  }
+
+  void _addCachedFont(_CachedFont font) {
+    _cachedFonts[font.face] = font;
+    final resolvedFace = font.resolvedFace;
+    if (resolvedFace != null && resolvedFace != font.face) {
+      stderr.writeln('Caching font "$resolvedFace" as alias for "${font.face}"');
+      _aliases[font.face] = resolvedFace;
+      _cachedFonts[resolvedFace] = font;
+    }
+  }
+
+  void clear() {
+    _cachedFonts.clear();
+    _aliases.clear();
+    _missingFonts.clear();
+  }
+
+  static final _fontNamesToIgnore = {'Symbol', 'ZapfDingbats'};
+
+  Pointer<Void> _mapFontCallback(
+    Pointer<pdfium_bindings.FPDF_SYSFONTINFO> sysFontInfo,
+    int weight,
+    int italic,
+    int charset,
+    int pitchFamily,
+    Pointer<Char> face,
+    Pointer<pdfium_bindings.FPDF_BOOL> bExact,
+  ) {
+    final faceName = face.cast<Utf8>().toDartString();
+    final cachedFont = _cachedFonts[faceName] ?? _cachedFonts[_aliases[faceName]];
+    if (cachedFont != null) {
+      cachedFont.charset ??= charset;
+      if (bExact.address != 0) {
+        bExact.value = 1;
+      }
+      return _createMappedFontHandle(cachedFont);
+    }
+
+    if (!_fontNamesToIgnore.contains(faceName)) {
+      _missingFonts[faceName] = PdfFontQuery(
+        face: faceName,
+        weight: weight,
+        isItalic: italic != 0,
+        charset: PdfFontCharset.fromPdfiumCharsetId(charset),
+        pitchFamily: pitchFamily,
+      );
+    }
+    return nullptr;
+  }
+
+  int _getFontDataCallback(
+    Pointer<pdfium_bindings.FPDF_SYSFONTINFO> sysFontInfo,
+    Pointer<Void> hFont,
+    int table,
+    Pointer<UnsignedChar> buffer,
+    int bufSize,
+  ) {
+    final font = _mappedFonts[hFont.address];
+    if (font == null) {
+      return 0;
+    }
+    final data = table == 0 ? font.data : font.getTableData(table);
+    if (data == null) {
+      return 0;
+    }
+    if (buffer.address == 0 || bufSize < data.length) {
+      return data.length;
+    }
+    buffer.cast<Uint8>().asTypedList(data.length).setAll(0, data);
+    return data.length;
+  }
+
+  int _getFaceNameCallback(
+    Pointer<pdfium_bindings.FPDF_SYSFONTINFO> sysFontInfo,
+    Pointer<Void> hFont,
+    Pointer<Char> buffer,
+    int bufSize,
+  ) {
+    final font = _mappedFonts[hFont.address];
+    if (font == null) {
+      return 0;
+    }
+    final nameBytes = utf8.encode(font.resolvedFace ?? font.face);
+    final length = nameBytes.length + 1;
+    if (buffer.address == 0 || bufSize < length) {
+      return length;
+    }
+    final bytes = buffer.cast<Uint8>().asTypedList(length);
+    bytes.setAll(0, nameBytes);
+    bytes[nameBytes.length] = 0;
+    return length;
+  }
+
+  int _getFontCharsetCallback(Pointer<pdfium_bindings.FPDF_SYSFONTINFO> sysFontInfo, Pointer<Void> hFont) {
+    final font = _mappedFonts[hFont.address];
+    if (font == null) {
+      return PdfFontCharset.default_.pdfiumCharsetId;
+    }
+    return font.charset ?? PdfFontCharset.default_.pdfiumCharsetId;
+  }
+
+  void _deleteFontCallback(Pointer<pdfium_bindings.FPDF_SYSFONTINFO> sysFontInfo, Pointer<Void> hFont) {
+    final font = _mappedFonts.remove(hFont.address);
+    if (font == null) {
+      return;
+    }
+  }
+
+  Pointer<Void> _createMappedFontHandle(_CachedFont font) {
+    final handle = _nextMappedFontHandle++;
+    _mappedFonts[handle] = font;
+    return Pointer<Void>.fromAddress(handle);
+  }
 }
 
-/// Retrieve and clear the last missing fonts from [_lastMissingFonts] in a thread-safe manner.
-Future<List<PdfFontQuery>> _getAndClearMissingFonts() async {
-  return await (await BackgroundWorker.instance).compute((params) {
-    final fonts = _lastMissingFonts.values.toList();
-    _lastMissingFonts.clear();
-    return fonts;
-  }, null);
+class _CachedFont {
+  _CachedFont({required this.face, required this.source, required this.charset, this.resolvedFace});
+
+  final String face;
+  final String? resolvedFace;
+  final _FontSource source;
+  int? charset;
+
+  Uint8List get data => source.fullData;
+
+  static Set<String> extractFontNames(Uint8List data, int fontOffset) {
+    final nameTable = _FontSource.getTableDataFromData(data, fontOffset, _nameTableTag);
+    if (nameTable == null || nameTable.length < 6) {
+      return const {};
+    }
+    final count = _FontSource.readUint16From(nameTable, 2);
+    final stringOffset = _FontSource.readUint16From(nameTable, 4);
+    final names = <String>{};
+    var recordOffset = 6;
+    for (var i = 0; i < count; i++) {
+      if (recordOffset + 12 > nameTable.length) {
+        break;
+      }
+      final platformId = _FontSource.readUint16From(nameTable, recordOffset);
+      final nameId = _FontSource.readUint16From(nameTable, recordOffset + 6);
+      final length = _FontSource.readUint16From(nameTable, recordOffset + 8);
+      final offset = _FontSource.readUint16From(nameTable, recordOffset + 10);
+      recordOffset += 12;
+      if (nameId != 1 && nameId != 4 && nameId != 6 && nameId != 16) {
+        continue;
+      }
+      final start = stringOffset + offset;
+      if (start < 0 || start + length > nameTable.length) {
+        continue;
+      }
+      final name = _decodeNameString(Uint8List.sublistView(nameTable, start, start + length), platformId);
+      if (name != null && name.isNotEmpty) {
+        names.add(name);
+      }
+    }
+    return names;
+  }
+
+  Uint8List? getTableData(int table) {
+    return source.getTableData(table);
+  }
+
+  static String? _decodeNameString(Uint8List bytes, int platformId) {
+    try {
+      if (platformId == 0 || platformId == 3) {
+        final codeUnits = <int>[];
+        for (var i = 0; i + 1 < bytes.length; i += 2) {
+          codeUnits.add((bytes[i] << 8) | bytes[i + 1]);
+        }
+        return String.fromCharCodes(codeUnits).trim();
+      }
+      return latin1.decode(bytes).trim();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static const _nameTableTag = 0x6e616d65;
+}
+
+class _FontSource {
+  _FontSource._({required this.fontOffset, required Uint8List Function() loadFullData}) : _loadFullData = loadFullData;
+
+  factory _FontSource.memory(Uint8List data) =>
+      _FontSource._(fontOffset: getFontOffsetFromData(data), loadFullData: () => data);
+
+  factory _FontSource.fromFile(File file, {required int fontOffset}) =>
+      _FontSource._(fontOffset: fontOffset, loadFullData: file.readAsBytesSync);
+
+  static Uint8List? readHeaderDataFromFile(File file, {int maxHeaderSize = 1024 * 1024}) {
+    final length = file.lengthSync();
+    if (length <= 0) {
+      return null;
+    }
+    final headerLength = min(length, maxHeaderSize);
+    final openedFile = file.openSync();
+    late final Uint8List headerData;
+    try {
+      headerData = openedFile.readSync(headerLength);
+    } finally {
+      openedFile.closeSync();
+    }
+    if (headerData.isEmpty) {
+      return null;
+    }
+    return headerData;
+  }
+
+  final Uint8List Function() _loadFullData;
+  final int? fontOffset;
+  Uint8List? _fullData;
+
+  Uint8List get fullData => _fullData ??= _loadFullData();
+
+  Uint8List? getTableData(int table) {
+    final fontOffset = this.fontOffset;
+    if (fontOffset == null) {
+      return null;
+    }
+    return getTableDataFromData(fullData, fontOffset, table);
+  }
+
+  static Uint8List? getTableDataFromData(Uint8List data, int fontOffset, int table) {
+    if (fontOffset + 12 > data.length) {
+      return null;
+    }
+    final numTables = readUint16From(data, fontOffset + 4);
+    final recordsEnd = fontOffset + 12 + numTables * 16;
+    if (recordsEnd > data.length) {
+      return null;
+    }
+    var tableRecordOffset = fontOffset + 12;
+    for (var i = 0; i < numTables; i++) {
+      if (readUint32From(data, tableRecordOffset) == table) {
+        final offset = readUint32From(data, tableRecordOffset + 8);
+        final length = readUint32From(data, tableRecordOffset + 12);
+        if (offset < 0 || length < 0 || offset + length > data.length) {
+          return null;
+        }
+        return Uint8List.sublistView(data, offset, offset + length);
+      }
+      tableRecordOffset += 16;
+    }
+    return null;
+  }
+
+  static int? getFontOffsetFromData(Uint8List data) {
+    if (data.length < 12) {
+      return null;
+    }
+    const ttcTag = 0x74746366;
+    final signature = readUint32From(data, 0);
+    if (signature != ttcTag) {
+      return 0;
+    }
+    if (data.length < 16) {
+      return null;
+    }
+    final numFonts = readUint32From(data, 8);
+    if (numFonts < 1) {
+      return null;
+    }
+    final offset = readUint32From(data, 12);
+    if (offset < 0 || offset >= data.length) {
+      return null;
+    }
+    return offset;
+  }
+
+  static int readUint16From(Uint8List data, int offset) => (data[offset] << 8) | data[offset + 1];
+
+  static int readUint32From(Uint8List data, int offset) =>
+      (data[offset] << 24) | (data[offset + 1] << 16) | (data[offset + 2] << 8) | data[offset + 3];
 }
 
 class PdfrxEntryFunctionsImpl implements PdfrxEntryFunctions {
@@ -196,8 +588,16 @@ class PdfrxEntryFunctionsImpl implements PdfrxEntryFunctions {
 
   @override
   Future<T> suspendPdfiumWorkerDuringAction<T>(FutureOr<T> Function() action) async {
-    return await (await BackgroundWorker.instance).suspendDuringAction(action);
+    return await BackgroundWorker.suspendDuringAction(action);
   }
+
+  @override
+  Future<R> compute<M, R>(FutureOr<R> Function(M message) callback, M message) async {
+    return await BackgroundWorker.compute(callback, message);
+  }
+
+  @override
+  Future<void> stopBackgroundWorker() => _deinit();
 
   @override
   Future<PdfDocument> openAsset(
@@ -256,7 +656,7 @@ class PdfrxEntryFunctionsImpl implements PdfrxEntryFunctions {
   }) async {
     await _init();
     return _openByFunc(
-      (password) async => (await BackgroundWorker.instance).computeWithArena((arena, params) {
+      (password) async => BackgroundWorker.computeWithArena((arena, params) {
         final doc = pdfium.FPDF_LoadDocument(params.filePath.toUtf8(arena), params.password?.toUtf8(arena) ?? nullptr);
         return doc.address;
       }, (filePath: filePath, password: password)),
@@ -318,7 +718,7 @@ class PdfrxEntryFunctionsImpl implements PdfrxEntryFunctions {
       try {
         await read(buffer.asTypedList(fileSize), 0, fileSize);
         return _openByFunc(
-          (password) async => (await BackgroundWorker.instance).computeWithArena(
+          (password) async => BackgroundWorker.computeWithArena(
             (arena, params) => pdfium.FPDF_LoadMemDocument(
               Pointer<Void>.fromAddress(params.buffer),
               params.fileSize,
@@ -348,7 +748,7 @@ class PdfrxEntryFunctionsImpl implements PdfrxEntryFunctions {
     final fa = await PdfiumFileAccess.create(fileSize, read);
     try {
       return _openByFunc(
-        (password) async => (await BackgroundWorker.instance).computeWithArena(
+        (password) async => BackgroundWorker.computeWithArena(
           (arena, params) => pdfium.FPDF_LoadCustomDocument(
             Pointer<pdfium_bindings.FPDF_FILEACCESS>.fromAddress(params.fileAccess),
             params.password?.toUtf8(arena) ?? nullptr,
@@ -435,7 +835,7 @@ class PdfrxEntryFunctionsImpl implements PdfrxEntryFunctions {
   @override
   Future<PdfDocument> createNew({required String sourceName}) async {
     await _init();
-    final doc = await (await BackgroundWorker.instance).compute((params) {
+    final doc = await BackgroundWorker.compute((params) {
       return pdfium.FPDF_CreateNewDocument().address;
     }, null);
     return _PdfDocumentPdfium.fromPdfDocument(
@@ -457,7 +857,7 @@ class PdfrxEntryFunctionsImpl implements PdfrxEntryFunctions {
     final dataBuffer = malloc<Uint8>(jpegData.length);
     try {
       dataBuffer.asTypedList(jpegData.length).setAll(0, jpegData);
-      final doc = await (await BackgroundWorker.instance).computeWithArena(
+      final doc = await BackgroundWorker.computeWithArena(
         (arena, params) {
           final document = pdfium.FPDF_CreateNewDocument();
           final newPage = pdfium.FPDFPage_New(document, 0, params.width, params.height);
@@ -518,30 +918,62 @@ class PdfrxEntryFunctionsImpl implements PdfrxEntryFunctions {
   };
 
   @override
-  Future<void> reloadFonts() async {
-    await _initializeFontEnvironment();
-  }
-
-  @override
-  Future<void> addFontData({required String face, required Uint8List data}) async {
-    await _appLocalFontPath!.create(recursive: true);
-    final name = base64Encode(utf8.encode(face));
-    final file = File('${_appLocalFontPath!.path}/$name.ttf');
-    await file.writeAsBytes(data);
-    stderr.writeln('Added font data: $face (${data.length} bytes) at ${file.path}');
-  }
-
-  @override
-  Future<void> clearAllFontData() async {
-    try {
-      await _appLocalFontPath!.delete(recursive: true);
-    } catch (e) {
-      // ignored
+  Future<void> configureFontEnvironment({String? fontCachePath, List<String> fontPaths = const []}) async {
+    _fontCachePath = fontCachePath;
+    _fontPaths = List.unmodifiable(fontPaths);
+    if (_initialized) {
+      await _reloadFontFiles();
+    } else {
+      await _init();
     }
   }
 
   @override
-  PdfrxBackend get backend => PdfrxBackend.pdfium;
+  Future<void> reloadFonts() async {
+    await _reloadFontFiles();
+  }
+
+  @override
+  Future<void> addFontData({required String face, required Uint8List data, String? resolvedFace}) async {
+    final fontCachePath = _fontCachePath;
+    File? file;
+    if (fontCachePath != null) {
+      await Directory(fontCachePath).create(recursive: true);
+      final name = base64Encode(utf8.encode(face));
+      file = File('$fontCachePath/$name.ttf');
+      await file.writeAsBytes(data);
+    }
+    await BackgroundWorker.compute((params) {
+      _fontMapper?.addFontData(face: params.face, data: params.data, resolvedFace: params.resolvedFace);
+    }, (face: face, data: data, resolvedFace: resolvedFace));
+    stderr.writeln('Added font data: $face (${data.length} bytes)${file == null ? '' : ' at ${file.path}'}');
+  }
+
+  @override
+  Future<void> addFontFile({required String face, required String filePath, String? resolvedFace}) async {
+    await BackgroundWorker.compute((params) {
+      _fontMapper?.addFontFile(face: params.face, filePath: params.filePath, resolvedFace: params.resolvedFace);
+    }, (face: face, filePath: filePath, resolvedFace: resolvedFace));
+    stderr.writeln('Added font file: $face at $filePath');
+  }
+
+  @override
+  Future<void> clearAllFontData() async {
+    final fontCachePath = _fontCachePath;
+    if (fontCachePath != null) {
+      try {
+        await Directory(fontCachePath).delete(recursive: true);
+      } catch (e) {
+        // ignored
+      }
+    }
+    await BackgroundWorker.compute((params) {
+      _fontMapper?.clear();
+    }, null);
+  }
+
+  @override
+  PdfrxBackendType get backendType => PdfrxBackendType.pdfium;
 }
 
 extension _FpdfUtf8StringExt on String {
@@ -586,7 +1018,7 @@ class _PdfDocumentPdfium extends PdfDocument {
     }
     _PdfDocumentPdfium? pdfDoc;
     try {
-      final result = await (await BackgroundWorker.instance).computeWithArena((arena, docAddress) {
+      final result = await BackgroundWorker.computeWithArena((arena, docAddress) {
         final doc = pdfium_bindings.FPDF_DOCUMENT.fromAddress(docAddress);
         Pointer<pdfium_bindings.FPDF_FORMFILLINFO> formInfo = nullptr;
         pdfium_bindings.FPDF_FORMHANDLE formHandle = nullptr;
@@ -626,6 +1058,9 @@ class _PdfDocumentPdfium extends PdfDocument {
         maxPageCountToLoadAdditionally: useProgressiveLoading ? 1 : null,
       );
       pdfDoc._pages = List.unmodifiable(pages.pages);
+      if (!useProgressiveLoading) {
+        pdfDoc._notifyDocumentLoadComplete();
+      }
       pdfDoc._notifyMissingFonts();
       return pdfDoc;
     } catch (e) {
@@ -637,7 +1072,7 @@ class _PdfDocumentPdfium extends PdfDocument {
   /// Notify missing fonts by sending [PdfDocumentMissingFontsEvent].
   Future<void> _notifyMissingFonts() async {
     final lastMissingFonts = await _getAndClearMissingFonts();
-    if (lastMissingFonts.isNotEmpty) {
+    if (!isDisposed && lastMissingFonts.isNotEmpty) {
       subject.add(PdfDocumentMissingFontsEvent(this, lastMissingFonts));
     }
   }
@@ -671,9 +1106,19 @@ class _PdfDocumentPdfium extends PdfDocument {
           return;
         }
       }
-      if (loaded.pageCountLoadedTotal == loaded.pages.length || isDisposed) {
+      if (loaded.pageCountLoadedTotal == loaded.pages.length) {
+        _notifyDocumentLoadComplete();
         return;
       }
+      if (isDisposed) {
+        return;
+      }
+    }
+  }
+
+  void _notifyDocumentLoadComplete() {
+    if (!isDisposed) {
+      subject.add(PdfDocumentLoadCompleteEvent(this));
     }
   }
 
@@ -684,7 +1129,7 @@ class _PdfDocumentPdfium extends PdfDocument {
     Duration? timeout,
   }) async {
     try {
-      final results = await (await BackgroundWorker.instance).computeWithArena(
+      final results = await BackgroundWorker.computeWithArena(
         (arena, params) {
           final doc = pdfium_bindings.FPDF_DOCUMENT.fromAddress(params.docAddress);
           final pageCount = pdfium.FPDF_GetPageCount(doc);
@@ -763,6 +1208,71 @@ class _PdfDocumentPdfium extends PdfDocument {
   }
 
   @override
+  Future<void> reloadPages({List<int>? pageNumbersToReload}) async {
+    try {
+      final results = await BackgroundWorker.computeWithArena((arena, params) {
+        final doc = pdfium_bindings.FPDF_DOCUMENT.fromAddress(params.docAddress);
+        final pageCount = pdfium.FPDF_GetPageCount(doc);
+        if (params.pageNumbersToReload != null) {
+          for (final pageNumber in params.pageNumbersToReload!) {
+            if (pageNumber < 1 || pageNumber > pageCount) {
+              throw ArgumentError('Invalid page number to reload: $pageNumber', 'pageNumbersToReload');
+            }
+          }
+        }
+
+        final pageNumbersToLoad = SplayTreeSet.from(params.pageNumbersToReload ?? []);
+        pageNumbersToLoad.addAll(
+          Iterable.generate(pageCount - params.currentPageCount, (index) => params.currentPageCount + index + 1),
+        );
+
+        final pages = <({int pageIndex, double width, double height, int rotation, double bbLeft, double bbBottom})>[];
+        for (final pageNumber in pageNumbersToLoad) {
+          final page = pdfium.FPDF_LoadPage(doc, pageNumber - 1);
+          try {
+            final rect = arena<pdfium_bindings.FS_RECTF>();
+            pdfium.FPDF_GetPageBoundingBox(page, rect);
+            pages.add((
+              pageIndex: pageNumber - 1,
+              width: pdfium.FPDF_GetPageWidthF(page),
+              height: pdfium.FPDF_GetPageHeightF(page),
+              rotation: pdfium.FPDFPage_GetRotation(page),
+              bbLeft: rect.ref.left.toDouble(),
+              bbBottom: rect.ref.bottom.toDouble(),
+            ));
+          } finally {
+            pdfium.FPDF_ClosePage(page);
+          }
+        }
+        return (pages: pages);
+      }, (docAddress: document.address, pageNumbersToReload: pageNumbersToReload, currentPageCount: _pages.length));
+
+      final newPages = [..._pages];
+      for (var i = 0; i < results.pages.length; i++) {
+        final pageData = results.pages[i];
+        final newPage = _PdfPagePdfium._(
+          document: this,
+          pageNumber: i + 1,
+          width: pageData.width,
+          height: pageData.height,
+          rotation: PdfPageRotation.values[pageData.rotation],
+          bbLeft: pageData.bbLeft,
+          bbBottom: pageData.bbBottom,
+          isLoaded: true,
+        );
+        if (i < newPages.length) {
+          newPages[i] = newPage;
+        } else {
+          newPages.add(newPage);
+        }
+      }
+      pages = newPages;
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  @override
   List<PdfPage> get pages => _pages;
 
   @override
@@ -795,7 +1305,9 @@ class _PdfDocumentPdfium extends PdfDocument {
     }
 
     _pages = List.unmodifiable(pages);
-    subject.add(PdfDocumentPageStatusChangedEvent(this, changes: changes));
+    if (!isDisposed) {
+      subject.add(PdfDocumentPageStatusChangedEvent(this, changes: changes));
+    }
   }
 
   /// Don't handle [_pages] directly unless you really understand what you're doing; use [pages] getter/setter instead.
@@ -874,7 +1386,7 @@ class _PdfDocumentPdfium extends PdfDocument {
     if (!isDisposed) {
       isDisposed = true;
       subject.close();
-      await (await BackgroundWorker.instance).compute((params) {
+      await BackgroundWorker.compute((params) {
         final formHandle = pdfium_bindings.FPDF_FORMHANDLE.fromAddress(params.formHandle);
         final formInfo = Pointer<pdfium_bindings.FPDF_FORMFILLINFO>.fromAddress(params.formInfo);
         pdfium.FPDFDOC_ExitFormFillEnvironment(formHandle);
@@ -891,7 +1403,7 @@ class _PdfDocumentPdfium extends PdfDocument {
   @override
   Future<List<PdfOutlineNode>> loadOutline() async => isDisposed
       ? <PdfOutlineNode>[]
-      : await (await BackgroundWorker.instance).computeWithArena((arena, params) {
+      : await BackgroundWorker.computeWithArena((arena, params) {
           final document = pdfium_bindings.FPDF_DOCUMENT.fromAddress(params.document);
           return _getOutlineNodeSiblings(pdfium.FPDFBookmark_GetFirstChild(document, nullptr), document, arena);
         }, (document: document.address));
@@ -925,7 +1437,7 @@ class _PdfDocumentPdfium extends PdfDocument {
   Future<Uint8List> encodePdf({bool incremental = false, bool removeSecurity = false}) async {
     await assemble();
     final byteBuffer = BytesBuilder();
-    return await (await BackgroundWorker.instance).computeWithArena((arena, params) {
+    return await BackgroundWorker.computeWithArena((arena, params) {
       int write(Pointer<pdfium_bindings.FPDF_FILEWRITE> pThis, Pointer<Void> pData, int size) {
         byteBuffer.add(Pointer<Uint8>.fromAddress(pData.address).asTypedList(size));
         return size;
@@ -949,6 +1461,16 @@ class _PdfDocumentPdfium extends PdfDocument {
         nativeWriteCallable.close();
       }
     }, (document: document.address, incremental: incremental, removeSecurity: removeSecurity));
+  }
+
+  @override
+  Future<T> useNativeDocumentHandle<T>(FutureOr<T> Function(int nativeDocumentHandle) task) async {
+    if (isDisposed) {
+      throw StateError('Document is already disposed.');
+    }
+    return await PdfrxEntryFunctions.instance.suspendPdfiumWorkerDuringAction(() {
+      return task(document.address);
+    });
   }
 }
 
@@ -991,7 +1513,7 @@ class _DocumentPageArranger with ShuffleItemsInPlaceMixin {
       return false;
     }
 
-    await (await BackgroundWorker.instance).computeWithArena(
+    await BackgroundWorker.computeWithArena(
       (arena, params) {
         final arranger = _DocumentPageArranger._(
           pdfium_bindings.FPDF_DOCUMENT.fromAddress(params.document),
@@ -1135,7 +1657,7 @@ class _PdfPagePdfium extends PdfPage {
         ct?.attach(cancelFlag);
 
         if (cancelFlag.value || document.isDisposed) return false;
-        return await (await BackgroundWorker.instance).compute(
+        return await BackgroundWorker.compute(
           (params) {
             final cancelFlag = Pointer<Bool>.fromAddress(params.cancelFlag);
             if (cancelFlag.value) return false;
@@ -1250,7 +1772,7 @@ class _PdfPagePdfium extends PdfPage {
   @override
   Future<PdfPageRawText?> loadText() async {
     if (document.isDisposed || !isLoaded) return null;
-    return await (await BackgroundWorker.instance).computeWithArena((arena, params) {
+    return await BackgroundWorker.computeWithArena((arena, params) {
       final doubleSize = sizeOf<Double>();
       final rectBuffer = arena<Double>(4);
       final doc = pdfium_bindings.FPDF_DOCUMENT.fromAddress(params.docHandle);
@@ -1297,7 +1819,7 @@ class _PdfPagePdfium extends PdfPage {
 
   Future<List<PdfLink>> _loadWebLinks() async => document.isDisposed
       ? []
-      : await (await BackgroundWorker.instance).computeWithArena((arena, params) {
+      : await BackgroundWorker.computeWithArena((arena, params) {
           pdfium_bindings.FPDF_PAGE page = nullptr;
           pdfium_bindings.FPDF_TEXTPAGE textPage = nullptr;
           pdfium_bindings.FPDF_PAGELINK linkPage = nullptr;
@@ -1376,50 +1898,47 @@ class _PdfPagePdfium extends PdfPage {
 
   Future<List<PdfLink>> _loadAnnotLinks() async => document.isDisposed
       ? []
-      : await (await BackgroundWorker.instance).computeWithArena((arena, params) {
-              final document =
-                  pdfium_bindings.FPDF_DOCUMENT.fromAddress(params.document);
-              final formHandle =
-              pdfium_bindings.FPDF_FORMHANDLE.fromAddress(params.formHandle);
-              final page =
-                  pdfium.FPDF_LoadPage(document, params.pageNumber - 1);
-              try {
-                final count = pdfium.FPDFPage_GetAnnotCount(page);
-                final rectf = arena<pdfium_bindings.FS_RECTF>();
-                final links = <PdfLink>[];
-                for (int i = 0; i < count; i++) {
-                  final annot = pdfium.FPDFPage_GetAnnot(page, i);
-                  pdfium.FPDFAnnot_GetRect(annot, rectf);
-                  final r = rectf.ref;
-                  final rect = PdfRect(
-                    r.left,
-                    r.top > r.bottom ? r.top : r.bottom,
-                    r.right,
-                    r.top > r.bottom ? r.bottom : r.top,
-                  ).translate(-params.bbLeft, -params.bbBottom);
-                  final link = _createLinkForAnnot(
-                      annot,
-                      document,
-                      formHandle,
-                      arena,
-                      rect
-                  );
-                  if (link != null) {
-                    links.add(link);
-                  }
-                  pdfium.FPDFPage_CloseAnnot(annot);
-                }
-                return links;
-              } finally {
-                pdfium.FPDF_ClosePage(page);
+      : await BackgroundWorker.computeWithArena((arena, params) {
+          final document = pdfium_bindings.FPDF_DOCUMENT.fromAddress(params.document);
+          final formHandle = pdfium_bindings.FPDF_FORMHANDLE.fromAddress(params.formHandle);
+          final page = pdfium.FPDF_LoadPage(document, params.pageNumber - 1);
+          try {
+            final count = pdfium.FPDFPage_GetAnnotCount(page);
+            final rectf = arena<pdfium_bindings.FS_RECTF>();
+            final links = <PdfLink>[];
+            for (var i = 0; i < count; i++) {
+              final annot = pdfium.FPDFPage_GetAnnot(page, i);
+              pdfium.FPDFAnnot_GetRect(annot, rectf);
+              final r = rectf.ref;
+              final rect = PdfRect(
+                r.left,
+                r.top > r.bottom ? r.top : r.bottom,
+                r.right,
+                r.top > r.bottom ? r.bottom : r.top,
+              ).translate(-params.bbLeft, -params.bbBottom);
+              final link = _createLinkForAnnot(
+                annot,
+                document,
+                formHandle,
+                arena,
+                rect,
+              );
+              if (link != null) {
+                links.add(link);
               }
-            },
-         (document: document.document.address,
-         formHandle: document.formHandle.address,
-         pageNumber: pageNumber,
-         bbLeft: bbLeft,
-         bbBottom: bbBottom),
-        );
+              pdfium.FPDFPage_CloseAnnot(annot);
+            }
+            return links;
+          } finally {
+            pdfium.FPDF_ClosePage(page);
+          }
+        }, (
+          document: document.document.address,
+          formHandle: document.formHandle.address,
+          pageNumber: pageNumber,
+          bbLeft: bbLeft,
+          bbBottom: bbBottom,
+        ));
 
   static PdfLink? _createLinkForAnnot(
       pdfium_bindings.FPDF_ANNOTATION annot,

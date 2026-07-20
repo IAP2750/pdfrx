@@ -38,6 +38,23 @@ class PdfrxCoreGraphicsEntryFunctions implements PdfrxEntryFunctions {
   }
 
   @override
+  Future<R> compute<M, R>(
+    FutureOr<R> Function(M message) callback,
+    M message,
+  ) async {
+    throw UnimplementedError(
+      'compute() is not implemented for CoreGraphics backend.',
+    );
+  }
+
+  @override
+  Future<void> stopBackgroundWorker() async {
+    throw UnimplementedError(
+      'stopBackgroundWorker() is not implemented for CoreGraphics backend.',
+    );
+  }
+
+  @override
   Future<PdfDocument> openAsset(
     String name, {
     PdfPasswordProvider? passwordProvider,
@@ -231,14 +248,32 @@ class PdfrxCoreGraphicsEntryFunctions implements PdfrxEntryFunctions {
   }
 
   @override
+  Future<void> configureFontEnvironment({
+    String? fontCachePath,
+    List<String> fontPaths = const [],
+  }) async {
+    // Custom font registration is not currently supported by the CoreGraphics bridge.
+  }
+
+  @override
   Future<void> reloadFonts() async {
-    // CoreGraphics reuses system font registrations; nothing to do.
+    // CoreGraphics does not use PDFium's system font info callbacks.
   }
 
   @override
   Future<void> addFontData({
     required String face,
     required Uint8List data,
+    String? resolvedFace,
+  }) async {
+    // Custom font registration is not currently supported by the CoreGraphics bridge.
+  }
+
+  @override
+  Future<void> addFontFile({
+    required String face,
+    required String filePath,
+    String? resolvedFace,
   }) async {
     // Custom font registration is not currently supported by the CoreGraphics bridge.
   }
@@ -249,7 +284,7 @@ class PdfrxCoreGraphicsEntryFunctions implements PdfrxEntryFunctions {
   }
 
   @override
-  PdfrxBackend get backend => PdfrxBackend.pdfKit;
+  PdfrxBackendType get backendType => PdfrxBackendType.pdfKit;
 
   Future<PdfDocument> _openWithPassword({
     required PdfPasswordProvider? passwordProvider,
@@ -348,7 +383,15 @@ class _CoreGraphicsPdfDocument extends PdfDocument {
           rotation: _rotationFromDegrees(pageInfos[i]['rotation'] as int? ?? 0),
         ),
     ]);
+    // CoreGraphics loads all pages immediately, so notify load complete
+    if (!useProgressiveLoading) {
+      doc._notifyDocumentLoadComplete();
+    }
     return doc;
+  }
+
+  void _notifyDocumentLoadComplete() {
+    subject.add(PdfDocumentLoadCompleteEvent(this));
   }
 
   static PdfPageRotation _rotationFromDegrees(int degrees) {
@@ -406,9 +449,7 @@ class _CoreGraphicsPdfDocument extends PdfDocument {
     T? data,
     Duration loadUnitDuration = const Duration(milliseconds: 250),
   }) async {
-    if (onPageLoadProgress != null) {
-      await onPageLoadProgress(_pages.length, _pages.length, data);
-    }
+    // CoreGraphics loads all pages immediately; nothing to do.
   }
 
   @override
@@ -499,6 +540,22 @@ class _CoreGraphicsPdfDocument extends PdfDocument {
   }) async {
     throw UnimplementedError(
       'encodePdf() is not implemented for CoreGraphics backend.',
+    );
+  }
+
+  @override
+  Future<T> useNativeDocumentHandle<T>(
+    FutureOr<T> Function(int nativeDocumentHandle) task,
+  ) {
+    throw UnimplementedError(
+      'useNativeDocumentHandle() is not implemented for CoreGraphics backend.',
+    );
+  }
+
+  @override
+  Future<void> reloadPages({List<int>? pageNumbersToReload}) {
+    throw UnimplementedError(
+      'reloadPages() is not implemented for CoreGraphics backend.',
     );
   }
 }

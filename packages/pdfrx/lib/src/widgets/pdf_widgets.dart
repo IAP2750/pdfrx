@@ -4,8 +4,10 @@ import 'dart:math';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:pdfrx_engine/pdfrx_engine.dart';
 
-import '../../pdfrx.dart';
+import '../pdf_document_ref.dart';
+import '../pdfrx_flutter.dart';
 
 /// A widget that loads PDF document.
 ///
@@ -378,7 +380,7 @@ class _PdfPageViewState extends State<PdfPageView> {
                     boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 4, offset: Offset(2, 2))],
                   ),
             ),
-            if (pageImage != null) pageImage,
+            ?pageImage,
           ],
         ),
       ),

@@ -38,7 +38,7 @@ See [Example 2](#example-2-low-level-pdfium-bindings-access) below for detailed 
 
 ### PDFium Initialization
 
-PDFium requires initialization through its C API functions `FPDF_InitLibrary()` or `FPDF_InitLibraryWithConfig()` before any PDF operations can be performed. Starting from pdfrx v2.1.15, this initialization is handled automatically when you call:
+PDFium requires initialization through its C API functions `FPDF_InitLibrary()` or `FPDF_InitLibraryWithConfig()` before any PDF operations can be performed. pdfrx handles this initialization when you call:
 
 - `pdfrxFlutterInitialize()` - For Flutter applications
 - `pdfrxInitialize()` - For pure Dart applications
@@ -49,7 +49,7 @@ These functions internally call the PDFium's `FPDF_InitLibraryWithConfig()` to p
 - The initialization happens at the right time
 - The PDFium instance can be shared across multiple libraries
 
-**Important**: pdfrx does relatively important PDFium initialization process with `FPDF_InitLibraryWithConfig()`, so it's recommended to call `pdfrxFlutterInitialize()` or `pdfrxInitialize()` for initialization rather than calling `FPDF_InitLibrary()` or `FPDF_InitLibraryWithConfig()` on your code or by other libraries without any other important reason.
+**Important**: pdfrx configures PDFium with `FPDF_InitLibraryWithConfig()`, so prefer `pdfrxFlutterInitialize()` or `pdfrxInitialize()` over direct `FPDF_InitLibrary()` or `FPDF_InitLibraryWithConfig()` calls unless your application owns the full PDFium lifecycle.
 
 ### Suspending PDFium Worker
 
@@ -94,7 +94,7 @@ class PdfProcessor {
   // Initialize both libraries
   static Future<void> initialize() async {
     // Initialize pdfrx (which calls FPDF_InitLibraryWithConfig internally)
-    pdfrxFlutterInitialize();
+    await pdfrxFlutterInitialize();
   }
 
   // Process PDF with the other library
@@ -112,7 +112,7 @@ class PdfProcessor {
   Future<void> renderWithPdfrx(String path) async {
     final doc = await PdfDocument.openFile(path);
     // ... render pages ...
-    doc.dispose();
+    await doc.dispose();
   }
 }
 ```
@@ -134,8 +134,8 @@ class LowLevelPdfiumAccess {
     // Initialize PDFium through pdfrx
     await pdfrxFlutterInitialize();
 
-    // Get PDFium bindings
-    final pdfium = await getPdfium();
+    // Resolve PDFium bindings for the current Flutter runtime
+    final pdfium = getPdfium();
 
     // Now you can use all PDFium C API functions through the bindings
     // Remember to wrap calls with suspendPdfiumWorkerDuringAction
@@ -148,7 +148,7 @@ class LowLevelPdfiumAccess {
   }
 
   Future<Map<String, String>> extractCustomMetadata(Uint8List pdfData) async {
-    final pdfium = await getPdfium();
+    final pdfium = getPdfium();
 
     return await PdfrxEntryFunctions.instance.suspendPdfiumWorkerDuringAction(() {
       return using((arena) {
@@ -215,13 +215,13 @@ import 'package:pdfrx/pdfrx.dart';
 
 class BatchProcessor {
   Future<void> processBatch(List<String> files) async {
-    pdfrxFlutterInitialize();
+    await pdfrxFlutterInitialize();
 
     for (final file in files) {
       // Use pdfrx for rendering
       final doc = await PdfDocument.openFile(file);
       final pageImage = await doc.pages[0].render();
-      doc.dispose();
+      await doc.dispose();
 
       // Use another library for text extraction
       // (wrapped to prevent interference)
@@ -246,7 +246,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Initialize PDFium for all libraries (calls FPDF_InitLibraryWithConfig)
-  pdfrxFlutterInitialize();
+  await pdfrxFlutterInitialize();
 
   runApp(MyApp());
 }

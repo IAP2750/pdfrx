@@ -27,6 +27,22 @@ class PdfrxEntryFunctionsImpl implements PdfrxEntryFunctions {
   }
 
   @override
+  Future<R> compute<M, R>(FutureOr<R> Function(M message) callback, M message) async {
+    throw UnimplementedError(
+      'compute() is not implemented because PdfrxEntryFunctions.instance is not initialized. '
+      'Please call pdfrxInitialize()/pdfrxFlutterInitialize() or explicitly set PdfrxEntryFunctions.instance.',
+    );
+  }
+
+  @override
+  Future<void> stopBackgroundWorker() async {
+    throw UnimplementedError(
+      'stopBackgroundWorker() is not implemented because PdfrxEntryFunctions.instance is not initialized. '
+      'Please call pdfrxInitialize()/pdfrxFlutterInitialize() or explicitly set PdfrxEntryFunctions.instance.',
+    );
+  }
+
+  @override
   Future<PdfDocument> openAsset(
     String name, {
     PdfPasswordProvider? passwordProvider,
@@ -90,14 +106,20 @@ class PdfrxEntryFunctionsImpl implements PdfrxEntryFunctions {
   }) => unimplemented();
 
   @override
+  Future<void> configureFontEnvironment({String? fontCachePath, List<String> fontPaths = const []}) => unimplemented();
+
+  @override
   Future<void> reloadFonts() => unimplemented();
 
   @override
-  Future<void> addFontData({required String face, required Uint8List data}) => unimplemented();
+  Future<void> addFontData({required String face, required Uint8List data, String? resolvedFace}) => unimplemented();
+
+  @override
+  Future<void> addFontFile({required String face, required String filePath, String? resolvedFace}) => unimplemented();
 
   @override
   Future<void> clearAllFontData() => unimplemented();
 
   @override
-  PdfrxBackend get backend => PdfrxBackend.mock;
+  PdfrxBackendType get backendType => PdfrxBackendType.mock;
 }

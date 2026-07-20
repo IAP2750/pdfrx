@@ -11,11 +11,11 @@ jobs:
         target: [ios, macos]
     steps:
       - name: Checkout
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Build PDFium ${{ matrix.target }}
         run: ./packages/pdfrx/darwin/pdfium/build ${{ matrix.target }}
       - name: Upload PDFium artifact
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: pdfium-${{ matrix.target }}
           path: ./packages/pdfrx/darwin/pdfium/pdfium-${{ matrix.target }}.zip
@@ -25,17 +25,17 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Download iOS artifact
-        uses: actions/download-artifact@f093f21ca4cfa7c75ccbbc2be54da76a0c7e1f05 # v6.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v6.0.0
         with:
           name: pdfium-ios
           path: ./packages/pdfrx/darwin/pdfium/
       - name: Download macOS artifact
-        uses: actions/download-artifact@f093f21ca4cfa7c75ccbbc2be54da76a0c7e1f05 # v6.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v6.0.0
         with:
           name: pdfium-macos
           path: ./packages/pdfrx/darwin/pdfium/
       - name: Release PDFium
-        uses: softprops/action-gh-release@5be0e66d93ac7ed76da52eca8bb058f665c3a5fe # v0.1.15
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v0.1.15
         with:
           token: ${{ secrets.TOKEN_FOR_RELEASE }}
           tag_name: ${{ github.ref_name }}
