@@ -1907,13 +1907,90 @@ function _getLinkUrl(linkPage, linkIndex) {
   return url;
 }
 
+const FPDF_FORMFIELD_PUSHBUTTON = 1;
+const FPDF_FORMFILLINFO_VERSION_INDEX = 0;
+const FPDF_FORMFILLINFO_FFI_DO_GOTO_ACTION_INDEX = 15;
+
 /**
- * @param {{docHandle: number, pageIndex: number}} params
+ * Install FFI_DoGoToAction for a temporary form-fill environment.
+ * Other callbacks are left null, matching the native pdfrx implementation.
+ * @param {Uint32Array} formInfoView
+ * @param {(pThis: number, nPageIndex: number, zoomMode: number, fPosArray: number, sizeofArray: number) => void} onGoToAction
+ * @returns {number} wasm table index to remove on cleanup
+ */
+function _installDoGoToActionCallback(formInfoView, onGoToAction) {
+  formInfoView[FPDF_FORMFILLINFO_VERSION_INDEX] = 1;
+  const doGoToAction = Pdfium.addFunction(onGoToAction, 'viiiii');
+  formInfoView[FPDF_FORMFILLINFO_FFI_DO_GOTO_ACTION_INDEX] = doGoToAction;
+  return doGoToAction;
+}
+
+/**
+ * @param {number} annot
+ * @param {number} formHandle
+ * @returns {boolean}
+ */
+function _isAnnotPushButton(annot, formHandle) {
+  if (!formHandle) return false;
+  return Pdfium.wasmExports.FPDFAnnot_GetFormFieldType(formHandle, annot) === FPDF_FORMFIELD_PUSHBUTTON;
+}
+
+/**
+ * @param {number} annot
+ * @param {number} docHandle
+ * @param {number} formHandle
+ * @param {number[]} rect
+ * @returns {PdfDestLink|PdfUrlLink|null}
+ */
+function _createLinkForAnnot(annot, docHandle, formHandle, rect) {
+  const annotation = _getAnnotationContent(annot);
+
+  const dest = _processAnnotDest(annot, docHandle);
+  if (dest) {
+    return {
+      rects: [rect],
+      dest: _pdfDestFromDest(dest, docHandle),
+      annotation: annotation,
+    };
+  }
+
+  const url = _processAnnotLink(annot, docHandle);
+  if (url) {
+    return {
+      rects: [rect],
+      url: url,
+      annotation: annotation,
+    };
+  }
+
+  if (_isAnnotPushButton(annot, formHandle)) {
+    return {
+      rects: [rect],
+      isPushButton: true,
+      annotation: annotation,
+    };
+  }
+
+  if (annotation) {
+    return {
+      rects: [rect],
+      annotation: annotation,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * @param {{docHandle: number, pageIndex: number, formHandle: number}} params
  * @returns {Array<PdfDestLink|PdfUrlLink>}
  */
 function _loadAnnotLinks(params) {
-  const { pageIndex, docHandle } = params;
+  const { pageIndex, docHandle, formHandle } = params;
   const pageHandle = Pdfium.wasmExports.FPDF_LoadPage(docHandle, pageIndex);
+  if (formHandle) {
+    Pdfium.wasmExports.FORM_OnAfterLoadPage(pageHandle, formHandle);
+  }
   const count = Pdfium.wasmExports.FPDFPage_GetAnnotCount(pageHandle);
   const rectF = Pdfium.wasmExports.malloc(4 * 4);
   const links = [];
@@ -1923,30 +2000,71 @@ function _loadAnnotLinks(params) {
     const [l, t, r, b] = new Float32Array(Pdfium.memory.buffer, rectF, 4);
     const rect = [l, t > b ? t : b, r, t > b ? b : t];
 
-    const annotation = _getAnnotationContent(annot);
-
-    const dest = _processAnnotDest(annot, docHandle);
-    if (dest) {
-      links.push({
-        rects: [rect],
-        dest: _pdfDestFromDest(dest, docHandle),
-        annotation: annotation,
-      });
-    } else {
-      const url = _processAnnotLink(annot, docHandle);
-      if (url || annotation) {
-        links.push({
-          rects: [rect],
-          url: url,
-          annotation: annotation,
-        });
-      }
+    const link = _createLinkForAnnot(annot, docHandle, formHandle, rect);
+    if (link) {
+      links.push(link);
     }
     Pdfium.wasmExports.FPDFPage_CloseAnnot(annot);
   }
   Pdfium.wasmExports.free(rectF);
+  if (formHandle) {
+    Pdfium.wasmExports.FORM_OnBeforeClosePage(pageHandle, formHandle);
+  }
   Pdfium.wasmExports.FPDF_ClosePage(pageHandle);
   return links;
+}
+
+/**
+ * @param {{docHandle: number, pageIndex: number, x: number, y: number}} params
+ * @returns {{dest: PdfDest|null}}
+ */
+function destFromClickOnFormField(params) {
+  const { docHandle, pageIndex, x, y } = params;
+  /** @type {PdfDest|null} */
+  let dest = null;
+
+  const formInfoSize = 35 * 4;
+  const formInfo = Pdfium.wasmExports.malloc(formInfoSize);
+  const formInfoView = new Uint32Array(Pdfium.memory.buffer, formInfo, formInfoSize >> 2);
+  formInfoView.fill(0);
+
+  const doGoToAction = _installDoGoToActionCallback(
+    formInfoView,
+    (_pThis, nPageIndex, zoomMode, fPosArray, sizeofArray) => {
+      dest = {
+        pageIndex: nPageIndex,
+        command: pdfDestCommands[zoomMode],
+        params: Array.from(new Float32Array(Pdfium.memory.buffer, fPosArray, sizeofArray)),
+      };
+    },
+  );
+
+  let formHandle = 0;
+  let pageHandle = 0;
+  try {
+    formHandle = Pdfium.wasmExports.FPDFDOC_InitFormFillEnvironment(docHandle, formInfo);
+    pageHandle = Pdfium.wasmExports.FPDF_LoadPage(docHandle, pageIndex);
+    if (!pageHandle) {
+      throw new Error(`Failed to load page ${pageIndex} from document ${docHandle}`);
+    }
+    Pdfium.wasmExports.FORM_OnAfterLoadPage(pageHandle, formHandle);
+    if (Pdfium.wasmExports.FPDFPage_HasFormFieldAtPoint(formHandle, pageHandle, x, y) !== -1) {
+      Pdfium.wasmExports.FORM_OnMouseMove(formHandle, pageHandle, 0, x, y);
+      Pdfium.wasmExports.FORM_OnLButtonDown(formHandle, pageHandle, 0, x, y);
+      Pdfium.wasmExports.FORM_OnLButtonUp(formHandle, pageHandle, 0, x, y);
+    }
+    return { dest };
+  } finally {
+    if (pageHandle) {
+      Pdfium.wasmExports.FORM_OnBeforeClosePage(pageHandle, formHandle);
+      Pdfium.wasmExports.FPDF_ClosePage(pageHandle);
+    }
+    if (formHandle) {
+      Pdfium.wasmExports.FPDFDOC_ExitFormFillEnvironment(formHandle);
+    }
+    Pdfium.removeFunction(doGoToAction);
+    Pdfium.wasmExports.free(formInfo);
+  }
 }
 
 /**
@@ -2896,6 +3014,7 @@ const functions = {
   renderPage,
   loadText,
   loadLinks,
+  destFromClickOnFormField,
   reloadFonts,
   addFontData,
   clearAllFontData,

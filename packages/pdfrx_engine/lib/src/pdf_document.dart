@@ -253,7 +253,7 @@ abstract class PdfDocument {
   /// It does not mean the document contents (or the document files) are identical.
   bool isIdenticalDocumentHandle(Object? other);
 
-  PdfDest? destFromClickOnFormField(PdfPage pdfPage, Offset position);
+  Future<PdfDest?> destFromClickOnFormField(PdfPage pdfPage, Offset position);
 
   /// Assemble the document after modifying pages.
   ///

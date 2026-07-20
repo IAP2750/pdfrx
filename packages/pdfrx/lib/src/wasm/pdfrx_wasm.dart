@@ -613,7 +613,21 @@ class _PdfDocumentWasm extends PdfDocument {
   }
 
   @override
-  PdfDest? destFromClickOnFormField(PdfPage pdfPage, Offset position) => null;
+  Future<PdfDest?> destFromClickOnFormField(PdfPage pdfPage, Offset position) async {
+    if (isDisposed) return null;
+    final wasmPage = pdfPage.unwrap<_PdfPageWasm>();
+    if (wasmPage == null) return null;
+    final result = await _sendCommand(
+      'destFromClickOnFormField',
+      parameters: {
+        'docHandle': document['docHandle'],
+        'pageIndex': wasmPage.pageNumber - 1,
+        'x': position.dx,
+        'y': position.dy,
+      },
+    );
+    return _pdfDestFromMap(result['dest']);
+  }
 
   Future<bool> assemble() async {
     // Build the indices, imported pages map, and rotations
@@ -727,6 +741,7 @@ class _PdfPageWasm extends PdfPage {
         'docHandle': document.document['docHandle'],
         'pageIndex': pageNumber - 1,
         'enableAutoLinkDetection': enableAutoLinkDetection,
+        'formHandle': document.document['formHandle'],
       },
     );
     return (result['links'] as List).map((link) {
@@ -756,6 +771,10 @@ class _PdfPageWasm extends PdfPage {
               creationDate: PdfDateTime.fromPdfDateString(annotationData['creationDate']),
             )
           : null;
+
+      if (link['isPushButton'] == true) {
+        return PdfLink(rects, isPushButton: true, annotation: annotation);
+      }
 
       if (url is String) {
         return PdfLink(rects, url: Uri.tryParse(url), annotation: annotation);

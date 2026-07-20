@@ -1320,7 +1320,7 @@ class _PdfDocumentPdfium extends PdfDocument {
       other is _PdfDocumentPdfium && document.address == other.document.address;
 
   @override
-  PdfDest? destFromClickOnFormField(PdfPage pdfPage, Offset position) {
+  Future<PdfDest?> destFromClickOnFormField(PdfPage pdfPage, Offset position) async {
     PdfDest? dest;
     final page = pdfium.FPDF_LoadPage(document, pdfPage.pageNumber - 1);
     if (page == nullptr) {

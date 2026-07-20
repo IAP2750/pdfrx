@@ -4971,39 +4971,46 @@ class _CanvasLinkPainter {
   bool _handleLinkTap(Offset tapPosition) {
     _state._requestFocus();
     resetCursor();
-    final link = _findLinkAtPositionOnTap(tapPosition);
-    if (link != null) {
+    final link = _findLinkAtPosition(tapPosition);
+    if (link == null) {
+      return false;
+    }
+    if (link.isPushButton) {
       final onLinkTap = _state.widget.params.linkHandlerParams?.onLinkTap;
       if (onLinkTap != null) {
-        onLinkTap(link);
+        unawaited(_handlePushButtonLinkTap(tapPosition, link));
         return true;
       }
+      return false;
+    }
+    final onLinkTap = _state.widget.params.linkHandlerParams?.onLinkTap;
+    if (onLinkTap != null) {
+      onLinkTap(link);
+      return true;
     }
     return false;
   }
 
-  PdfLink? _findLinkAtPositionOnTap(Offset position) {
-    final link = _findLinkAtPosition(position);
-    if (link != null) {
-      if (link.isPushButton) {
-        final document = _state._document;
-        final hitResult = _state._getPdfPageHitTestResult(
-          position,
-          useDocumentLayoutCoordinates: false,
-        );
-        if (hitResult != null) {
-          final page = hitResult.page;
-          final offset = hitResult.offset;
-          final dest = document?.destFromClickOnFormField(
-              page,
-              Offset(offset.x, offset.y)
-          );
-          return PdfLink(link.rects, dest: dest, isPushButton: true);
-        }
-      }
-      return link;
+  Future<void> _handlePushButtonLinkTap(Offset tapPosition, PdfLink link) async {
+    final document = _state._document;
+    final hitResult = _state._getPdfPageHitTestResult(
+      tapPosition,
+      useDocumentLayoutCoordinates: false,
+    );
+    if (hitResult == null) {
+      return;
     }
-    return null;
+    final dest = await document?.destFromClickOnFormField(
+      hitResult.page,
+      Offset(hitResult.offset.x, hitResult.offset.y),
+    );
+    if (dest == null) {
+      return;
+    }
+    final onLinkTap = _state.widget.params.linkHandlerParams?.onLinkTap;
+    if (onLinkTap != null) {
+      onLinkTap(PdfLink(link.rects, dest: dest, isPushButton: true));
+    }
   }
 
   void handleHover(Offset position, [VoidCallback? onCursorChanged]) {

@@ -488,6 +488,9 @@ class _CoreGraphicsPdfDocument extends PdfDocument {
   }
 
   @override
+  Future<PdfDest?> destFromClickOnFormField(PdfPage pdfPage, Offset position) async => null;
+
+  @override
   set pages(List<PdfPage> newPages) {
     final pages = <PdfPage>[];
     final changes = <int, PdfPageStatusChange>{};
